@@ -1,20 +1,36 @@
+export interface AdditionalHost {
+  hostname: string
+  service: string
+  disableChunkedEncoding: boolean
+}
+
 export interface TunnelConfig {
   tunnel_token_secret: string
   tunnel_token_masked: string
   post_quantum: boolean
-  log_level: 'debug' | 'info' | 'warn' | 'error' | 'fatal'
+  log_level: 'trace' | 'debug' | 'info' | 'notice' | 'warn' | 'warning' | 'error' | 'fatal'
   extra_args: string
   container_name: string
   container_image: string
+  external_hostname: string
+  additional_hosts: AdditionalHost[]
+  tunnel_name: string
+  catch_all_service: string
+  nginx_proxy_manager: boolean
 }
 
 export interface TunnelConfigUpdate {
   tunnel_token?: string | null
   post_quantum: boolean
-  log_level: 'debug' | 'info' | 'warn' | 'error' | 'fatal'
+  log_level: 'trace' | 'debug' | 'info' | 'notice' | 'warn' | 'warning' | 'error' | 'fatal'
   extra_args: string
   container_name: string
   container_image: string
+  external_hostname: string
+  additional_hosts: AdditionalHost[]
+  tunnel_name: string
+  catch_all_service: string
+  nginx_proxy_manager: boolean
 }
 
 export type ContainerStatusType =

@@ -23,6 +23,11 @@ async def get_config():
         extra_args=cfg.get("extra_args", ""),
         container_name=cfg.get("container_name", "cloudflared"),
         container_image=cfg.get("container_image", "cloudflare/cloudflared:latest"),
+        external_hostname=cfg.get("external_hostname", ""),
+        additional_hosts=cfg.get("additional_hosts", []),
+        tunnel_name=cfg.get("tunnel_name", ""),
+        catch_all_service=cfg.get("catch_all_service", ""),
+        nginx_proxy_manager=cfg.get("nginx_proxy_manager", False),
     )
 
 
@@ -48,6 +53,11 @@ async def update_config(body: TunnelConfigWrite):
             "extra_args": body.extra_args,
             "container_name": body.container_name,
             "container_image": body.container_image,
+            "external_hostname": body.external_hostname,
+            "additional_hosts": [h.model_dump() for h in body.additional_hosts],
+            "tunnel_name": body.tunnel_name,
+            "catch_all_service": body.catch_all_service,
+            "nginx_proxy_manager": body.nginx_proxy_manager,
         }
     )
 
@@ -60,4 +70,9 @@ async def update_config(body: TunnelConfigWrite):
         extra_args=new_cfg["extra_args"],
         container_name=new_cfg["container_name"],
         container_image=new_cfg["container_image"],
+        external_hostname=new_cfg["external_hostname"],
+        additional_hosts=new_cfg["additional_hosts"],
+        tunnel_name=new_cfg["tunnel_name"],
+        catch_all_service=new_cfg["catch_all_service"],
+        nginx_proxy_manager=new_cfg["nginx_proxy_manager"],
     )

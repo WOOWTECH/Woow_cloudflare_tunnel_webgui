@@ -1,15 +1,43 @@
 from pydantic import BaseModel, Field, field_validator
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 import re
 
 
 class LogLevel(str, Enum):
+    trace = "trace"
     debug = "debug"
     info = "info"
+    notice = "notice"
     warn = "warn"
+    warning = "warning"
     error = "error"
     fatal = "fatal"
+
+
+class AdditionalHost(BaseModel):
+    hostname: str = Field(description="Public hostname for this route")
+    service: str = Field(description="Local service URL, e.g. http://localhost:8080")
+    disableChunkedEncoding: bool = Field(
+        default=False,
+        description="Disable chunked transfer encoding for this host",
+    )
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Hostname cannot be empty")
+        return v
+
+    @field_validator("service")
+    @classmethod
+    def validate_service(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Service URL cannot be empty")
+        return v
 
 
 class TunnelConfigRead(BaseModel):
@@ -22,6 +50,12 @@ class TunnelConfigRead(BaseModel):
     extra_args: str = ""
     container_name: str = "cloudflared"
     container_image: str = "cloudflare/cloudflared:latest"
+    # HAOS-matching fields
+    external_hostname: str = ""
+    additional_hosts: List[AdditionalHost] = []
+    tunnel_name: str = ""
+    catch_all_service: str = ""
+    nginx_proxy_manager: bool = False
 
 
 class TunnelConfigWrite(BaseModel):
@@ -35,6 +69,12 @@ class TunnelConfigWrite(BaseModel):
     extra_args: str = ""
     container_name: str = "cloudflared"
     container_image: str = "cloudflare/cloudflared:latest"
+    # HAOS-matching fields
+    external_hostname: str = ""
+    additional_hosts: List[AdditionalHost] = []
+    tunnel_name: str = ""
+    catch_all_service: str = ""
+    nginx_proxy_manager: bool = False
 
     @field_validator("extra_args")
     @classmethod
@@ -49,6 +89,16 @@ class TunnelConfigWrite(BaseModel):
         if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$", v):
             raise ValueError("Invalid container name")
         return v
+
+    @field_validator("external_hostname")
+    @classmethod
+    def validate_external_hostname(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("catch_all_service")
+    @classmethod
+    def validate_catch_all_service(cls, v: str) -> str:
+        return v.strip()
 
 
 class ContainerStatus(str, Enum):

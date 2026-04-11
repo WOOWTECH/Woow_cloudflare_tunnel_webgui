@@ -12,6 +12,11 @@ DEFAULT_CONFIG = {
     "extra_args": "",
     "container_name": "cloudflared",
     "container_image": "cloudflare/cloudflared:latest",
+    "external_hostname": "",
+    "additional_hosts": [],
+    "tunnel_name": "",
+    "catch_all_service": "",
+    "nginx_proxy_manager": False,
 }
 
 
