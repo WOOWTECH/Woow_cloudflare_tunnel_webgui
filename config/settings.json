@@ -1,0 +1,8 @@
+{
+  "tunnel_token_secret": "cf-tunnel-token",
+  "post_quantum": false,
+  "log_level": "info",
+  "extra_args": "",
+  "container_name": "cloudflared",
+  "container_image": "cloudflare/cloudflared:latest"
+}

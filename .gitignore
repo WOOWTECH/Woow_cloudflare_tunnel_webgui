@@ -1,0 +1,8 @@
+backend/static/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+frontend/node_modules/
+frontend/dist/
+.env
+config/.csrf_secret
