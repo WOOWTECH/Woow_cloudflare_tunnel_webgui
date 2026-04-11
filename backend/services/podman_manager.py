@@ -114,6 +114,7 @@ class PodmanManager:
                 cmd.extend(extra_args.split())
 
             # Create with secret injected as TUNNEL_TOKEN env var
+            # Use host network so cloudflared can reach services on the host
             ctr = client.containers.create(
                 image=image,
                 name=container_name,
@@ -121,6 +122,7 @@ class PodmanManager:
                 secret_env={"TUNNEL_TOKEN": secret_name},
                 detach=True,
                 restart_policy={"Name": "unless-stopped"},
+                network_mode="host",
             )
             ctr.start()
             return ctr.id
