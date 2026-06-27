@@ -59,3 +59,15 @@ def test_no_tls_verify_false_omits_origin_request_key():
         routes=[{"hostname": "h", "service": "s"}], no_tls_verify=False)
     assert "originRequest" not in cfg["ingress"][0]   # 無任何 origin 設定 → 不產生空 dict
     assert "originRequest" not in cfg["ingress"][-1]   # catch-all 同理
+
+
+def test_multiple_routes_preserve_order_with_catch_all_last():
+    routes = [
+        {"hostname": "a", "service": "s1"},
+        {"hostname": "b", "service": "s2"},
+        {"hostname": "c", "service": "s3"},
+    ]
+    cfg = build_ingress_config("u", "/c", routes=routes)
+    hosts = [e.get("hostname") for e in cfg["ingress"]]
+    assert hosts == ["a", "b", "c", None]   # None = catch-all
+    assert cfg["ingress"][-1]["service"] == "http_status:404"
