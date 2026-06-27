@@ -45,6 +45,36 @@ class AdditionalHost(BaseModel):
         return v
 
 
+VALID_HOSTNAME_RE = re.compile(
+    r"^(([a-z0-9]|[a-z0-9][a-z0-9\-]*[a-z0-9])\.)*"
+    r"([a-z0-9]|[a-z0-9][a-z0-9\-]*[a-z0-9])$"
+)
+
+
+class Route(BaseModel):
+    hostname: str
+    service: str
+    disableChunkedEncoding: bool = False
+
+    @field_validator("hostname")
+    @classmethod
+    def _valid_hostname(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("hostname 不可為空")
+        if not VALID_HOSTNAME_RE.match(v):
+            raise ValueError("hostname 不可含協定(http://)或埠(:8123),且須小寫")
+        return v
+
+    @field_validator("service")
+    @classmethod
+    def _valid_service(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("service 不可為空")
+        return v
+
+
 class TunnelConfigRead(BaseModel):
     """Response model for GET /api/config — token is always masked."""
 

@@ -289,3 +289,13 @@ from backend.models.schemas import TunnelMode
 def test_tunnel_mode_values():
     assert TunnelMode.local.value == "local"
     assert TunnelMode.token.value == "token"
+
+
+from backend.models.schemas import Route
+
+
+def test_route_accepts_valid_hostname_and_service():
+    r = Route(hostname="app.example.com", service="http://localhost:8080")
+    assert r.hostname == "app.example.com"
+    assert r.service == "http://localhost:8080"
+    assert r.disableChunkedEncoding is False   # 預設
