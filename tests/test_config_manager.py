@@ -1,6 +1,6 @@
 """
-測試 2: ConfigManager 持久化與合併邏輯
-涵蓋: 檔案建立、合併預設值、新增欄位遷移、token 不外洩
+測試: ConfigManager 持久化與合併邏輯(本地管理版)
+涵蓋: 預設值、缺鍵 merge、token 不落地、routes 多筆持久化、空 routes
 """
 
 import json
@@ -21,164 +21,105 @@ def cfg_path(tmp_path):
 
 
 # =========================================================================
-# 初始化行為
+# 預設值 / 去 HA 化
 # =========================================================================
-class TestConfigManagerInit:
+class TestDefaultConfig:
+    def test_default_config_has_no_ha_fields(self):
+        assert "external_hostname" not in DEFAULT_CONFIG
+        assert "nginx_proxy_manager" not in DEFAULT_CONFIG
+        assert "additional_hosts" not in DEFAULT_CONFIG
+        assert "container_name" not in DEFAULT_CONFIG
+        assert "extra_args" not in DEFAULT_CONFIG
+        assert "tunnel_token_secret" not in DEFAULT_CONFIG
+
+    def test_default_config_new_fields(self):
+        assert DEFAULT_CONFIG["mode"] == "local"
+        assert DEFAULT_CONFIG["routes"] == []
+        assert DEFAULT_CONFIG["catch_all_service"] == ""
+        assert DEFAULT_CONFIG["tunnel_name"] == ""
+        assert DEFAULT_CONFIG["post_quantum"] is False
+        assert DEFAULT_CONFIG["log_level"] == "info"
+        assert DEFAULT_CONFIG["run_parameters"] == ""
+        assert DEFAULT_CONFIG["no_tls_verify"] is True
+
     @pytest.mark.asyncio
     async def test_load_creates_default_if_missing(self, cfg_mgr, cfg_path):
-        """首次 load 時應自動建立 settings.json 並回傳預設值。"""
         result = await cfg_mgr.load()
         assert cfg_path.exists()
-        assert result["post_quantum"] is False
-        assert result["log_level"] == "info"
-        assert result["external_hostname"] == ""
-        assert result["additional_hosts"] == []
-        assert result["tunnel_name"] == ""
+        assert result["mode"] == "local"
+        assert result["routes"] == []
         assert result["catch_all_service"] == ""
-        assert result["nginx_proxy_manager"] is False
-
-    @pytest.mark.asyncio
-    async def test_default_config_has_all_new_fields(self, cfg_mgr):
-        """DEFAULT_CONFIG 必須包含所有 HAOS 新欄位。"""
-        for key in [
-            "external_hostname",
-            "additional_hosts",
-            "tunnel_name",
-            "catch_all_service",
-            "nginx_proxy_manager",
-        ]:
-            assert key in DEFAULT_CONFIG, f"Missing key: {key}"
+        assert result["tunnel_name"] == ""
+        assert result["no_tls_verify"] is True
 
 
 # =========================================================================
-# 儲存與讀取
+# 缺鍵 merge(舊檔相容)
 # =========================================================================
-class TestConfigManagerSaveLoad:
+class TestMerge:
     @pytest.mark.asyncio
-    async def test_save_and_reload(self, cfg_mgr):
-        """儲存後重新讀取應回傳相同資料。"""
-        await cfg_mgr.save(
-            {
-                "post_quantum": True,
-                "log_level": "debug",
-                "external_hostname": "home.test.io",
-                "tunnel_name": "test-tunnel",
-                "catch_all_service": "http://localhost:80",
-                "nginx_proxy_manager": True,
-                "additional_hosts": [
-                    {
-                        "hostname": "app.test.io",
-                        "service": "http://localhost:3000",
-                        "disableChunkedEncoding": True,
-                    }
-                ],
-            }
-        )
-        loaded = await cfg_mgr.load()
-        assert loaded["post_quantum"] is True
-        assert loaded["log_level"] == "debug"
-        assert loaded["external_hostname"] == "home.test.io"
-        assert loaded["tunnel_name"] == "test-tunnel"
-        assert loaded["catch_all_service"] == "http://localhost:80"
-        assert loaded["nginx_proxy_manager"] is True
-        assert len(loaded["additional_hosts"]) == 1
-        assert loaded["additional_hosts"][0]["disableChunkedEncoding"] is True
+    async def test_load_merges_missing_keys(self, tmp_path):
+        f = tmp_path / "settings.json"
+        f.write_text('{"tunnel_name": "demo"}')
+        mgr = ConfigManager(config_path=f)
+        cfg = await mgr.load()
+        assert cfg["tunnel_name"] == "demo"
+        assert cfg["routes"] == []
+        assert cfg["mode"] == "local"
+        assert cfg["catch_all_service"] == ""
 
     @pytest.mark.asyncio
-    async def test_token_never_persisted(self, cfg_mgr, cfg_path):
-        """tunnel_token 欄位不應寫入 settings.json。"""
-        await cfg_mgr.save({"tunnel_token": "super-secret-token"})
-        raw = json.loads(cfg_path.read_text())
-        assert "tunnel_token" not in raw
-
-    @pytest.mark.asyncio
-    async def test_save_merges_with_defaults(self, cfg_mgr):
-        """只儲存部分欄位時，其餘應保持預設值。"""
-        await cfg_mgr.save({"log_level": "error"})
-        loaded = await cfg_mgr.load()
-        assert loaded["log_level"] == "error"
-        assert loaded["container_name"] == "cloudflared"  # default
-        assert loaded["external_hostname"] == ""  # default
-        assert loaded["nginx_proxy_manager"] is False  # default
+    async def test_existing_values_preserved(self, tmp_path):
+        f = tmp_path / "settings.json"
+        f.write_text(json.dumps({"mode": "token", "log_level": "debug"}))
+        mgr = ConfigManager(config_path=f)
+        cfg = await mgr.load()
+        assert cfg["mode"] == "token"
+        assert cfg["log_level"] == "debug"
 
 
 # =========================================================================
-# 舊版 config 相容性（遷移）
+# token 不落地
 # =========================================================================
-class TestConfigManagerMigration:
+class TestTokenNotPersisted:
     @pytest.mark.asyncio
-    async def test_old_config_missing_new_fields(self, tmp_path):
-        """
-        模擬舊版 settings.json 不含新欄位的情境。
-        load() 應自動補上 DEFAULT_CONFIG 中的預設值。
-        """
-        old_config = {
-            "tunnel_token_secret": "cf-tunnel-token",
-            "post_quantum": False,
-            "log_level": "info",
-            "extra_args": "",
-            "container_name": "cloudflared",
-            "container_image": "cloudflare/cloudflared:latest",
-        }
-        cfg_path = tmp_path / "settings.json"
-        cfg_path.write_text(json.dumps(old_config))
-
-        mgr = ConfigManager(config_path=cfg_path)
-        loaded = await mgr.load()
-
-        # 新欄位應自動補上
-        assert loaded["external_hostname"] == ""
-        assert loaded["additional_hosts"] == []
-        assert loaded["tunnel_name"] == ""
-        assert loaded["catch_all_service"] == ""
-        assert loaded["nginx_proxy_manager"] is False
-
-    @pytest.mark.asyncio
-    async def test_old_config_preserves_existing_values(self, tmp_path):
-        """舊版 config 的既有欄位值不應被覆蓋。"""
-        old_config = {
-            "tunnel_token_secret": "cf-tunnel-token",
-            "post_quantum": True,
-            "log_level": "debug",
-            "extra_args": "--protocol quic",
-            "container_name": "my-cloudflared",
-            "container_image": "cloudflare/cloudflared:latest",
-        }
-        cfg_path = tmp_path / "settings.json"
-        cfg_path.write_text(json.dumps(old_config))
-
-        mgr = ConfigManager(config_path=cfg_path)
-        loaded = await mgr.load()
-
-        assert loaded["post_quantum"] is True
-        assert loaded["log_level"] == "debug"
-        assert loaded["extra_args"] == "--protocol quic"
-        assert loaded["container_name"] == "my-cloudflared"
+    async def test_save_strips_raw_token(self, cfg_mgr, cfg_path):
+        await cfg_mgr.save({"tunnel_token": "SECRET", "tunnel_name": "x"})
+        on_disk = json.loads(cfg_path.read_text())
+        assert "tunnel_token" not in on_disk
+        assert on_disk["tunnel_name"] == "x"
 
 
 # =========================================================================
-# Additional Hosts 持久化
+# routes 持久化
 # =========================================================================
-class TestConfigManagerAdditionalHosts:
+class TestRoutes:
     @pytest.mark.asyncio
-    async def test_multiple_hosts_persist(self, cfg_mgr):
-        """多筆 additional_hosts 應完整持久化。"""
-        hosts = [
+    async def test_multiple_routes_persist(self, cfg_mgr):
+        routes = [
             {"hostname": "a.io", "service": "http://localhost:3000", "disableChunkedEncoding": False},
             {"hostname": "b.io", "service": "http://localhost:4000", "disableChunkedEncoding": True},
             {"hostname": "c.io", "service": "http://localhost:5000", "disableChunkedEncoding": False},
         ]
-        await cfg_mgr.save({"additional_hosts": hosts})
+        await cfg_mgr.save({"routes": routes})
         loaded = await cfg_mgr.load()
-        assert len(loaded["additional_hosts"]) == 3
-        assert loaded["additional_hosts"][1]["disableChunkedEncoding"] is True
+        assert len(loaded["routes"]) == 3
+        assert loaded["routes"][1]["disableChunkedEncoding"] is True
 
     @pytest.mark.asyncio
-    async def test_empty_hosts_persist(self, cfg_mgr):
-        """清空 additional_hosts 後應回傳空列表。"""
+    async def test_empty_routes_persist(self, cfg_mgr):
         await cfg_mgr.save(
-            {"additional_hosts": [{"hostname": "x.io", "service": "http://localhost:1"}]}
+            {"routes": [{"hostname": "x.io", "service": "http://localhost:1"}]}
         )
-        await cfg_mgr.save({"additional_hosts": []})
+        await cfg_mgr.save({"routes": []})
         loaded = await cfg_mgr.load()
-        assert loaded["additional_hosts"] == []
+        assert loaded["routes"] == []
+
+    @pytest.mark.asyncio
+    async def test_save_merges_with_defaults(self, cfg_mgr):
+        await cfg_mgr.save({"log_level": "error"})
+        loaded = await cfg_mgr.load()
+        assert loaded["log_level"] == "error"
+        assert loaded["mode"] == "local"  # default
+        assert loaded["routes"] == []  # default
+        assert loaded["no_tls_verify"] is True  # default

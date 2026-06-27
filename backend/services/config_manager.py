@@ -6,17 +6,15 @@ CONFIG_DIR = Path("/app/config")
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 
 DEFAULT_CONFIG = {
-    "tunnel_token_secret": "cf-tunnel-token",
+    "mode": "local",                 # local | token
+    "tunnel_name": "",
+    "routes": [],                    # [{hostname, service, disableChunkedEncoding}]
+    "catch_all_service": "",
     "post_quantum": False,
     "log_level": "info",
-    "extra_args": "",
-    "container_name": "cloudflared",
-    "container_image": "cloudflare/cloudflared:latest",
-    "external_hostname": "",
-    "additional_hosts": [],
-    "tunnel_name": "",
-    "catch_all_service": "",
-    "nginx_proxy_manager": False,
+    "run_parameters": "",
+    "no_tls_verify": True,
+    "container_image": "cloudflare/cloudflared:latest",  # 保留供 e2e/相容
 }
 
 
