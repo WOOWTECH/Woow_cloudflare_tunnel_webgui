@@ -278,3 +278,14 @@ class TestContainerStatus:
     def test_invalid_status_rejected(self):
         with pytest.raises(ValueError):
             ContainerStatus("nonexistent")
+
+
+# =========================================================================
+# Phase 2: 本地管理新模型 (TunnelMode / Route / SetupState)
+# =========================================================================
+from backend.models.schemas import TunnelMode
+
+
+def test_tunnel_mode_values():
+    assert TunnelMode.local.value == "local"
+    assert TunnelMode.token.value == "token"

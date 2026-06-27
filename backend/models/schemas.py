@@ -15,6 +15,11 @@ class LogLevel(str, Enum):
     fatal = "fatal"
 
 
+class TunnelMode(str, Enum):
+    local = "local"
+    token = "token"
+
+
 class AdditionalHost(BaseModel):
     hostname: str = Field(description="Public hostname for this route")
     service: str = Field(description="Local service URL, e.g. http://localhost:8080")
