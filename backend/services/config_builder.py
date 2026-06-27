@@ -1,4 +1,6 @@
 """Pure functions that turn route config into a cloudflared ingress config dict."""
+import json
+from pathlib import Path
 from typing import Optional
 
 
@@ -32,3 +34,9 @@ def build_ingress_config(
         "credentials-file": credentials_file,
         "ingress": ingress,
     }
+
+
+def write_config_json(config: dict, path: "Path | str") -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=2))

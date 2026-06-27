@@ -1,4 +1,6 @@
-from backend.services.config_builder import build_ingress_config
+import json
+
+from backend.services.config_builder import build_ingress_config, write_config_json
 
 
 def test_empty_routes_produces_only_catch_all_404():
@@ -71,3 +73,10 @@ def test_multiple_routes_preserve_order_with_catch_all_last():
     hosts = [e.get("hostname") for e in cfg["ingress"]]
     assert hosts == ["a", "b", "c", None]   # None = catch-all
     assert cfg["ingress"][-1]["service"] == "http_status:404"
+
+
+def test_write_config_json_roundtrip(tmp_path):
+    cfg = build_ingress_config("u", "/c", routes=[{"hostname": "h", "service": "s"}])
+    out = tmp_path / "config.json"
+    write_config_json(cfg, out)
+    assert json.loads(out.read_text()) == cfg
