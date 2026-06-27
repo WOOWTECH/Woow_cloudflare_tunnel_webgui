@@ -47,6 +47,10 @@ def settings_file(tmp_config_dir):
 
 # ---------------------------------------------------------------------------
 # Fixtures: mock PodmanManager so tests don't need a real socket
+#
+# DEPRECATED (待 Phase 6 移除): Podman 相關 fixtures(mock_podman 及其在
+# client fixture 中的使用)會在 Phase 6 去 Podman 化時一併移除。目前暫時
+# 保留以免既有測試 import 爆掉;不要在新測試中依賴它們。
 # ---------------------------------------------------------------------------
 @pytest.fixture()
 def mock_podman():
