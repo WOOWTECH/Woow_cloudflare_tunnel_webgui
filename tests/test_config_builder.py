@@ -26,3 +26,20 @@ def test_single_route_has_hostname_service_and_no_tls_verify():
     }
     # catch-all 仍在最後
     assert cfg["ingress"][-1]["service"] == "http_status:404"
+
+
+def test_disable_chunked_true_written_to_origin_request():
+    cfg = build_ingress_config("u", "/c", routes=[
+        {"hostname": "h", "service": "s", "disableChunkedEncoding": True}])
+    assert cfg["ingress"][0]["originRequest"]["disableChunkedEncoding"] is True
+
+
+def test_disable_chunked_false_written_to_origin_request():
+    cfg = build_ingress_config("u", "/c", routes=[
+        {"hostname": "h", "service": "s", "disableChunkedEncoding": False}])
+    assert cfg["ingress"][0]["originRequest"]["disableChunkedEncoding"] is False
+
+
+def test_disable_chunked_absent_not_in_origin_request():
+    cfg = build_ingress_config("u", "/c", routes=[{"hostname": "h", "service": "s"}])
+    assert "disableChunkedEncoding" not in cfg["ingress"][0]["originRequest"]
