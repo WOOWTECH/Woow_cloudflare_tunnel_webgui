@@ -50,3 +50,26 @@ class ProcessManager:
 
     def recent_logs(self) -> list[str]:
         return list(self._logs)
+
+
+def build_run_args(
+    mode: str,
+    binary: str = "cloudflared",
+    token: str = "",
+    origincert: str = "/data/cert.pem",
+    config: str = "/data/config.json",
+    tunnel_name: str = "",
+    post_quantum: bool = False,
+    log_level: str = "info",
+) -> list[str]:
+    args = [binary, "tunnel", "--no-autoupdate"]
+    if post_quantum:
+        args.append("--post-quantum")
+    if log_level and log_level != "info":
+        args.extend(["--loglevel", log_level])
+    if mode == "token":
+        args.extend(["run", "--token", token])
+    else:
+        args.extend(["--origincert", origincert, "--config", config,
+                     "run", tunnel_name])
+    return args

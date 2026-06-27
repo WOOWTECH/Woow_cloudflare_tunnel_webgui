@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from backend.services.process_manager import ProcessManager
+from backend.services.process_manager import ProcessManager, build_run_args
 
 
 @pytest.mark.asyncio
@@ -43,3 +43,25 @@ async def test_stop_is_idempotent_on_exited_process():
     assert pm.is_running() is False
     await pm.stop(timeout=5)     # 再次 stop 仍安全
     assert pm.is_running() is False
+
+
+def test_build_run_args_token_mode():
+    args = build_run_args(mode="token", token="TOK", binary="cloudflared")
+    assert args == ["cloudflared", "tunnel", "--no-autoupdate",
+                    "run", "--token", "TOK"]
+
+
+def test_build_run_args_local_mode():
+    args = build_run_args(mode="local", binary="cloudflared",
+                          origincert="/data/cert.pem",
+                          config="/data/config.json", tunnel_name="demo")
+    assert args == ["cloudflared", "tunnel", "--no-autoupdate",
+                    "--origincert", "/data/cert.pem",
+                    "--config", "/data/config.json", "run", "demo"]
+
+
+def test_build_run_args_appends_post_quantum_and_loglevel():
+    args = build_run_args(mode="token", token="T", binary="cloudflared",
+                          post_quantum=True, log_level="debug")
+    assert "--post-quantum" in args
+    assert args[args.index("--loglevel") + 1] == "debug"
