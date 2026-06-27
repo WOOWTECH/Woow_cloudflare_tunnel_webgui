@@ -6,17 +6,13 @@ from fastapi import APIRouter, HTTPException, WebSocket
 from pydantic import BaseModel
 
 from ..models.schemas import SetupState, TunnelMode
-from ..services.cloudflared_cli import CloudflaredCLI
 from ..services.config_builder import build_ingress_config, write_config_json
-from ..services.config_manager import ConfigManager
-from ..services.process_manager import ProcessManager, build_run_args
+from ..services.process_manager import build_run_args
+from ..services.instances import pm, config_mgr, cli
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
 DATA_DIR = Path("/data")
-config_mgr = ConfigManager()
-cli = CloudflaredCLI()
-pm = ProcessManager()
 
 
 @router.get("/state", response_model=SetupState)

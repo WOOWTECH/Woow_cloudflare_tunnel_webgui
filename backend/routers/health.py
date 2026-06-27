@@ -1,10 +1,9 @@
 from fastapi import APIRouter
 
 from ..models.schemas import HealthResponse
-from ..services.process_manager import ProcessManager
+from ..services.instances import pm
 
 router = APIRouter(tags=["health"])
-pm = ProcessManager()
 
 
 @router.get("/api/health", response_model=HealthResponse)

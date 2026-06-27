@@ -1,12 +1,9 @@
 from fastapi import APIRouter
 
 from ..models.schemas import TunnelConfigRead, TunnelConfigWrite, LogLevel, TunnelMode
-from ..services.config_manager import ConfigManager
-from ..services.token_store import TokenStore
+from ..services.instances import config_mgr, token_store
 
 router = APIRouter(prefix="/api/config", tags=["config"])
-config_mgr = ConfigManager()
-token_store = TokenStore()
 
 
 def _to_read(cfg: dict) -> TunnelConfigRead:

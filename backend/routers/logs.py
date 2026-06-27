@@ -1,9 +1,8 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..services.process_manager import ProcessManager
+from ..services.instances import pm
 
 router = APIRouter(tags=["logs"])
-pm = ProcessManager()
 
 
 @router.websocket("/ws/logs")

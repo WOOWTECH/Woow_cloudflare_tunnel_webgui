@@ -1,13 +1,9 @@
 from fastapi import APIRouter
 
-from ..services.config_manager import ConfigManager
-from ..services.process_manager import ProcessManager, build_run_args
-from ..services.token_store import TokenStore
+from ..services.process_manager import build_run_args
+from ..services.instances import pm, config_mgr, token_store
 
 router = APIRouter(prefix="/api/tunnel", tags=["tunnel"])
-config_mgr = ConfigManager()
-pm = ProcessManager()
-token_store = TokenStore()
 
 
 @router.get("/status")
