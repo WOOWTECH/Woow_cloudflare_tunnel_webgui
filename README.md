@@ -295,9 +295,10 @@ WebSocket-based real-time log viewer with filter search, auto-scroll, clear, and
 
 ### Prerequisites
 
-- **Podman** 4.0+ installed and running (rootless mode supported)
-- **Podman socket** activated: `systemctl --user enable --now podman.socket`
-- **Cloudflare account** with a tunnel token ([Get a token](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-remote-tunnel/))
+- **Docker** or **Podman** installed and running
+- **Cloudflare account** ([sign up](https://dash.cloudflare.com/sign-up) — free)
+
+The `cloudflared` binary is bundled inside the image, so no separate install and **no Podman/Docker socket mount** is required. Everything runs in a single container.
 
 ### Quick Start with Docker Compose
 
@@ -306,34 +307,53 @@ WebSocket-based real-time log viewer with filter search, auto-scroll, clear, and
 git clone https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui.git
 cd Woow_cloudflare_tunnel_webgui
 
-# 2. Build and start
-docker compose up -d --build
+# 2. Build and start (host 8888 → container 8000)
+docker compose up -d --build   # or: podman compose up -d --build
 
 # 3. Open the GUI
 open http://localhost:8888
 ```
 
-### Manual Build
+### Manual Build & Run
+
+The image is single-container and works identically on Docker and Podman — only the binary name differs:
 
 ```bash
-# Build the container image
-podman build -t cf-tunnel-gui:latest .
+# Build
+docker build -t cf-webui:latest .          # or: podman build -t cf-webui:latest .
 
-# Run the container
-podman run -d \
-  --name cf-tunnel-gui \
+# Run — map host 8888 to container 8000, persist state in the /data volume
+docker run -d \
+  --name cf-tunnel-webgui \
   -p 8888:8000 \
-  -v ${XDG_RUNTIME_DIR}/podman/podman.sock:/run/podman/podman.sock \
-  -v ./config:/app/config \
-  cf-tunnel-gui:latest
+  -v cf_data:/data \
+  -e CSRF_SECRET=$(openssl rand -hex 32) \
+  cf-webui:latest
+# Podman: replace `docker` with `podman`; the command is otherwise the same.
 ```
+
+`/data` holds tunnel credentials, route config and the local cloudflared state — keep it on a named volume so it survives container recreation.
+
+### Operating Modes
+
+| Mode | When to use | What you provide |
+|------|-------------|------------------|
+| **Local-managed** | You want the GUI to create and run the tunnel for you | Log in to Cloudflare from the GUI (self-service, below) |
+| **Token** | You already have a tunnel token from the Cloudflare dashboard | Paste the tunnel token in the Config page |
+
+#### Cloudflare login (self-service, local-managed mode)
+
+1. Open the GUI and start the login flow — it shows a Cloudflare URL/code.
+2. Open that URL in your browser, sign in, and authorize the zone.
+3. The credentials are written into `/data`; the GUI then creates and starts the tunnel for you.
+
+> **Deleting a route does not remove its DNS record.** When you delete a hostname/route in the GUI, the corresponding CNAME stays in your Cloudflare DNS. Remove it manually in the Cloudflare dashboard to fully retire the hostname.
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CSRF_SECRET` | Auto-generated | Secret key for CSRF token signing |
-| `PODMAN_SOCKET_PATH` | `unix:///run/podman/podman.sock` | Path to Podman socket |
 
 ## Configuration
 

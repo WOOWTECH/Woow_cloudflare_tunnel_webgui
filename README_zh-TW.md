@@ -295,9 +295,10 @@ Woow_cloudflare_tunnel_webgui/
 
 ### 前置需求
 
-- **Podman** 4.0+ 已安裝並運行（支援 rootless 模式）
-- **Podman socket** 已啟用：`systemctl --user enable --now podman.socket`
-- **Cloudflare 帳號** 並取得隧道 Token（[取得 Token](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-remote-tunnel/)）
+- **Docker** 或 **Podman** 已安裝並運行
+- **Cloudflare 帳號**（[免費註冊](https://dash.cloudflare.com/sign-up)）
+
+`cloudflared` 二進位已內建於映像中，因此**不需另外安裝、也不需掛載 Podman/Docker socket**，全部在單一容器內運行。
 
 ### 使用 Docker Compose 快速啟動
 
@@ -306,34 +307,53 @@ Woow_cloudflare_tunnel_webgui/
 git clone https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui.git
 cd Woow_cloudflare_tunnel_webgui
 
-# 2. 建置並啟動
-docker compose up -d --build
+# 2. 建置並啟動（主機 8888 → 容器 8000）
+docker compose up -d --build   # 或：podman compose up -d --build
 
 # 3. 開啟 GUI
 open http://localhost:8888
 ```
 
-### 手動建置
+### 手動建置與執行
+
+映像為單容器,在 Docker 與 Podman 上指令完全相同,僅二進位名稱不同：
 
 ```bash
-# 建置容器映像
-podman build -t cf-tunnel-gui:latest .
+# 建置
+docker build -t cf-webui:latest .          # 或：podman build -t cf-webui:latest .
 
-# 執行容器
-podman run -d \
-  --name cf-tunnel-gui \
+# 執行 — 主機 8888 對應容器 8000,狀態持久化於 /data volume
+docker run -d \
+  --name cf-tunnel-webgui \
   -p 8888:8000 \
-  -v ${XDG_RUNTIME_DIR}/podman/podman.sock:/run/podman/podman.sock \
-  -v ./config:/app/config \
-  cf-tunnel-gui:latest
+  -v cf_data:/data \
+  -e CSRF_SECRET=$(openssl rand -hex 32) \
+  cf-webui:latest
+# Podman：將 `docker` 換成 `podman` 即可,其餘相同。
 ```
+
+`/data` 存放隧道憑證、路由設定與本地 cloudflared 狀態 —— 請以 named volume 保存,確保容器重建後資料不遺失。
+
+### 運行模式
+
+| 模式 | 使用時機 | 你需要提供 |
+|------|----------|------------|
+| **本地管理（Local-managed）** | 想讓 GUI 幫你建立並運行隧道 | 於 GUI 內登入 Cloudflare（自助流程,見下） |
+| **Token** | 你已從 Cloudflare 儀表板取得隧道 Token | 在設定頁貼上隧道 Token |
+
+#### Cloudflare 登入（本地管理模式的自助流程）
+
+1. 在 GUI 開始登入流程 —— 畫面會顯示一組 Cloudflare 網址/代碼。
+2. 用瀏覽器開啟該網址,登入並授權對應 zone。
+3. 憑證會寫入 `/data`,GUI 隨即為你建立並啟動隧道。
+
+> **刪除路由不會移除其 DNS 紀錄。** 在 GUI 刪除某個主機名稱/路由後,對應的 CNAME 仍會留在你的 Cloudflare DNS 中。請至 Cloudflare 儀表板手動刪除,才能完全停用該主機名稱。
 
 ### 環境變數
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
 | `CSRF_SECRET` | 自動產生 | CSRF Token 簽名用金鑰 |
-| `PODMAN_SOCKET_PATH` | `unix:///run/podman/podman.sock` | Podman socket 路徑 |
 
 ## 設定指南
 
