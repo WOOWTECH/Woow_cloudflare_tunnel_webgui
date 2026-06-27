@@ -299,3 +299,17 @@ def test_route_accepts_valid_hostname_and_service():
     assert r.hostname == "app.example.com"
     assert r.service == "http://localhost:8080"
     assert r.disableChunkedEncoding is False   # 預設
+
+
+@pytest.mark.parametrize("bad", [
+    "https://app.example.com",   # 含協定
+    "app.example.com:8123",      # 含埠
+    "App.Example.com",           # 大寫(會被 lower 後仍合法 → 見下說明)
+    "",                          # 空
+    "   ",                       # 純空白
+])
+def test_route_rejects_invalid_hostname(bad):
+    if bad.strip().lower() == "app.example.com":
+        pytest.skip("大寫會被正規化為合法,改由 2.4 驗證")
+    with pytest.raises(ValidationError):
+        Route(hostname=bad, service="http://x")
