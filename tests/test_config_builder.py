@@ -52,3 +52,10 @@ def test_catch_all_service_replaces_404():
         "service": "http://192.168.1.100",
         "originRequest": {"noTLSVerify": True},
     }
+
+
+def test_no_tls_verify_false_omits_origin_request_key():
+    cfg = build_ingress_config("u", "/c",
+        routes=[{"hostname": "h", "service": "s"}], no_tls_verify=False)
+    assert "originRequest" not in cfg["ingress"][0]   # 無任何 origin 設定 → 不產生空 dict
+    assert "originRequest" not in cfg["ingress"][-1]   # catch-all 同理
