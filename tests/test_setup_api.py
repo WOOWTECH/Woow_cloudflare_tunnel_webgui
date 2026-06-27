@@ -119,3 +119,34 @@ async def test_login_ws_streams_url(client):
         msg = ws.receive_json()
         assert msg["type"] == "url"
         assert msg["url"].startswith("https://dash.cloudflare.com/argotunnel")
+
+
+# ── token-mode guard ───────────────────────────────────────
+import json as _json
+
+
+@pytest.mark.asyncio
+async def test_create_tunnel_blocked_in_token_mode(client, tmp_config_dir, monkeypatch):
+    monkeypatch.setattr("backend.routers.setup.DATA_DIR", tmp_config_dir)
+    (tmp_config_dir / "settings.json").write_text(_json.dumps({"mode": "token"}))
+    resp = await client.post("/api/setup/tunnel", json={"tunnel_name": "x"})
+    assert resp.status_code == 409
+    assert "token" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_apply_blocked_in_token_mode(client, tmp_config_dir, monkeypatch):
+    monkeypatch.setattr("backend.routers.setup.DATA_DIR", tmp_config_dir)
+    (tmp_config_dir / "settings.json").write_text(_json.dumps({"mode": "token"}))
+    (tmp_config_dir / "tunnel.json").write_text(_json.dumps({"TunnelID": "u"}))
+    resp = await client.post("/api/setup/apply", json={"routes": []})
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_tunnel_allowed_in_local_mode(client, tmp_config_dir, monkeypatch):
+    monkeypatch.setattr("backend.routers.setup.DATA_DIR", tmp_config_dir)
+    (tmp_config_dir / "settings.json").write_text(_json.dumps({"mode": "local"}))
+    resp = await client.post("/api/setup/tunnel", json={"tunnel_name": "demo"})
+    assert resp.status_code == 200
+    assert resp.json()["tunnel_uuid"] == "uuid-test"

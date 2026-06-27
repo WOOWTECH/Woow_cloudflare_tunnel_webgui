@@ -2,6 +2,27 @@
   <div class="mx-auto flex max-w-3xl flex-col gap-6 py-4">
     <h1 class="text-2xl font-bold text-gray-900">上線精靈</h1>
 
+    <!-- Guard: token-mode instances must not run the wizard -->
+    <section
+      v-if="isTokenMode"
+      data-test="token-guard"
+      class="rounded-xl border border-amber-300 bg-amber-50 p-6 shadow-sm"
+    >
+      <h2 class="mb-2 text-lg font-semibold text-amber-800">此實例為 token 模式</h2>
+      <p class="mb-3 text-sm text-amber-700">
+        上線精靈用於「本地管理 (local) 模式」從零建立自己的 tunnel。此實例目前以
+        token 模式沿用既有 tunnel 對外服務,在此完成精靈會誤建 tunnel 或中斷現有連線,
+        因此已停用。
+      </p>
+      <p class="text-sm text-amber-700">
+        要調整設定請到
+        <router-link to="/config" class="font-medium underline">Config</router-link>;
+        查看狀態請回
+        <router-link to="/" class="font-medium underline">Dashboard</router-link>。
+      </p>
+    </section>
+
+    <template v-if="!isTokenMode">
     <!-- Step indicator -->
     <ol class="flex items-center gap-2 text-xs font-medium text-gray-400">
       <li :class="step === 'A' ? 'text-cf-orange' : ''">1. 連結帳號</li>
@@ -142,6 +163,7 @@
         <LogViewer :messages="messages" :connected="connected" @clear="clear" />
       </div>
     </section>
+    </template>
   </div>
 </template>
 
@@ -162,6 +184,8 @@ interface LoginMessage {
 }
 
 const setup = useSetupStore()
+
+const isTokenMode = computed<boolean>(() => setup.mode === 'token')
 
 const tunnelName = ref('')
 const routes = ref<Route[]>([])

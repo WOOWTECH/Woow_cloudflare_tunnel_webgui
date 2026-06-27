@@ -14,6 +14,20 @@ router = APIRouter(prefix="/api/setup", tags=["setup"])
 
 DATA_DIR = Path("/data")
 
+_TOKEN_MODE_MSG = (
+    "上線精靈僅適用於本地管理 (local) 模式;此實例目前為 token 模式,"
+    "正由既有 tunnel 提供服務。請改用 Config 頁設定,或先將 mode 切換為 local "
+    "再使用精靈,以免誤建 tunnel 或中斷現有連線。"
+)
+
+
+async def _reject_if_token_mode() -> None:
+    """Guard: the wizard creates/replaces tunnels and must not run while a
+    token-mode tunnel is in service (would create a stray tunnel / disrupt)."""
+    cfg = await config_mgr.load()
+    if cfg.get("mode") == "token":
+        raise HTTPException(409, _TOKEN_MODE_MSG)
+
 
 @router.get("/state", response_model=SetupState)
 async def get_state() -> SetupState:
@@ -41,6 +55,7 @@ class CreateTunnelReq(BaseModel):
 
 @router.post("/tunnel")
 async def create_tunnel(req: CreateTunnelReq):
+    await _reject_if_token_mode()
     cred = str(DATA_DIR / "tunnel.json")
     uuid = await cli.create_tunnel(name=req.tunnel_name, cred_file=cred)
     cfg = await config_mgr.load()
@@ -56,6 +71,7 @@ class ApplyReq(BaseModel):
 
 @router.post("/apply")
 async def apply(req: ApplyReq):
+    await _reject_if_token_mode()
     tunnel_file = DATA_DIR / "tunnel.json"
     if not tunnel_file.exists():
         raise HTTPException(400, "尚未建立 tunnel")
@@ -101,6 +117,11 @@ async def apply(req: ApplyReq):
 @router.websocket("/login")
 async def login_ws(ws: WebSocket):
     await ws.accept()
+    cfg = await config_mgr.load()
+    if cfg.get("mode") == "token":
+        await ws.send_json({"type": "error", "message": _TOKEN_MODE_MSG})
+        await ws.close()
+        return
     src = "/root/.cloudflared/cert.pem"
     dest = str(DATA_DIR / "cert.pem")
     try:
