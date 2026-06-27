@@ -10,3 +10,14 @@ async def test_start_then_running_then_stop():
     assert pm.is_running() is True
     await pm.stop(timeout=5)
     assert pm.is_running() is False
+
+
+@pytest.mark.asyncio
+async def test_captures_stdout_into_log_buffer():
+    pm = ProcessManager()
+    await pm.start(["sh", "-c", "echo line-one; echo line-two; sleep 5"])
+    await asyncio.sleep(0.3)   # 讓 reader 收到
+    logs = pm.recent_logs()
+    assert "line-one" in logs
+    assert "line-two" in logs
+    await pm.stop(timeout=5)
