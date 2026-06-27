@@ -50,3 +50,25 @@ class CloudflaredCLI:
             "tunnel", "--config", config_path, "ingress", "validate",
         ])
         return rc == 0, (err or out)
+
+    async def login(self, src_cert: str, dest_cert: str):
+        proc = await asyncio.create_subprocess_exec(
+            self._binary, "tunnel", "login",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        url_sent = False
+        async for raw in proc.stdout:
+            line = raw.decode(errors="replace")
+            if not url_sent:
+                url = extract_login_url(line)
+                if url:
+                    url_sent = True
+                    yield url
+        await proc.wait()
+        from pathlib import Path
+        import shutil
+        src = Path(src_cert)
+        if src.exists():
+            Path(dest_cert).parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), dest_cert)

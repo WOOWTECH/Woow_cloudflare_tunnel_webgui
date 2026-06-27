@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -105,3 +106,56 @@ async def test_ingress_validate_fail(monkeypatch):
     ok, output = await cli.ingress_validate("/data/config.json")
     assert ok is False
     assert "duplicated" in output
+
+
+class _FakeProc:
+    def __init__(self, lines, cert_path):
+        self._lines = lines
+        self._cert = cert_path
+        self.returncode = None
+
+    async def _drain(self):
+        await asyncio.sleep(0)
+
+    @property
+    def stdout(self):
+        async def gen():
+            for ln in self._lines:
+                yield ln.encode()
+            # 模擬使用者完成授權後 cloudflared 寫出 cert 並結束
+            from pathlib import Path
+            Path(self._cert).write_text("FAKE CERT")
+        return _AsyncLineReader(gen())
+
+    async def wait(self):
+        self.returncode = 0
+        return 0
+
+
+class _AsyncLineReader:
+    def __init__(self, agen):
+        self._agen = agen
+    def __aiter__(self):
+        return self._agen
+
+
+@pytest.mark.asyncio
+async def test_login_yields_url_then_writes_cert(tmp_path, monkeypatch):
+    cert = tmp_path / "cert.pem"
+    src_cert = tmp_path / "src_cert.pem"
+    lines = [
+        "Please open the following URL:\n",
+        "https://dash.cloudflare.com/argotunnel?aud=x\n",
+    ]
+
+    async def fake_exec(*args, **kwargs):
+        return _FakeProc(lines, src_cert)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    cli = CloudflaredCLI()
+    urls = []
+    async for url in cli.login(src_cert=str(src_cert), dest_cert=str(cert)):
+        urls.append(url)
+    assert urls == ["https://dash.cloudflare.com/argotunnel?aud=x"]
+    assert cert.read_text() == "FAKE CERT"   # 已搬到 dest
