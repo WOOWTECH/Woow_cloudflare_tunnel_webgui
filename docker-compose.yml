@@ -1,15 +1,15 @@
-version: "3.8"
-
 services:
-  cloudflare-tunnel-gui:
+  cf-tunnel-webgui:
+    image: cf-webui:latest
+    container_name: cf-tunnel-webgui
     build: .
-    container_name: cf-tunnel-gui
+    restart: unless-stopped
     ports:
       - "8888:8000"
     volumes:
-      - ${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock:/run/podman/podman.sock
-      - ./config:/app/config
+      - cf_data:/data
     environment:
       - CSRF_SECRET=${CSRF_SECRET:-}
-      - PODMAN_SOCKET_PATH=unix:///run/podman/podman.sock
-    restart: unless-stopped
+
+volumes:
+  cf_data:
