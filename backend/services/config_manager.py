@@ -2,7 +2,9 @@ import json
 import asyncio
 from pathlib import Path
 
-CONFIG_DIR = Path("/app/config")
+# Persist settings on the /data volume so config survives container recreation
+# (TokenStore also uses /data; keeping them together is required for autostart).
+CONFIG_DIR = Path("/data")
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 
 DEFAULT_CONFIG = {

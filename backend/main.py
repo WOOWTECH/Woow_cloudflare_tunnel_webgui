@@ -81,7 +81,7 @@ def _get_csrf_secret() -> str:
     env = os.getenv("CSRF_SECRET")
     if env:
         return env
-    secret_path = Path("/app/config/.csrf_secret")
+    secret_path = Path("/data/.csrf_secret")
     if secret_path.exists():
         return secret_path.read_text().strip()
     secret = os.urandom(32).hex()
