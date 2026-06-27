@@ -11,6 +11,16 @@ class ProcessManager:
         self._args: list[str] = []
         self._logs: deque[str] = deque(maxlen=log_buffer)
         self._reader_task: Optional[asyncio.Task] = None
+        self._subscribers: set[asyncio.Queue] = set()
+
+    def subscribe(self) -> asyncio.Queue:
+        """Register a live log subscriber. Returns a queue fed each new line."""
+        q: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        self._subscribers.add(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        self._subscribers.discard(q)
 
     def is_running(self) -> bool:
         return self._proc is not None and self._proc.returncode is None
@@ -29,7 +39,13 @@ class ProcessManager:
     async def _read_logs(self) -> None:
         assert self._proc and self._proc.stdout
         async for raw in self._proc.stdout:
-            self._logs.append(raw.decode(errors="replace").rstrip("\n"))
+            line = raw.decode(errors="replace").rstrip("\n")
+            self._logs.append(line)
+            for q in list(self._subscribers):
+                try:
+                    q.put_nowait(line)
+                except asyncio.QueueFull:
+                    pass
 
     async def stop(self, timeout: int = 30) -> None:
         if not self._proc:
@@ -42,6 +58,9 @@ class ProcessManager:
                 self._proc.kill()
                 await self._proc.wait()
         self._proc = None
+        if self._reader_task:
+            self._reader_task.cancel()
+            self._reader_task = None
 
     async def restart(self) -> None:
         args = self._args

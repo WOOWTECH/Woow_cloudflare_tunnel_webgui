@@ -95,3 +95,23 @@ def test_autostart_local_mode_missing_config_returns_none():
     args = autostart_args({"mode": "local", "tunnel_name": "demo"}, token=None,
                           cert_exists=True, tunnel_exists=True, config_exists=False)
     assert args is None
+
+
+# ── log pub/sub (live streaming) ───────────────────────────
+@pytest.mark.asyncio
+async def test_subscribe_receives_new_log_lines():
+    pm = ProcessManager()
+    q = pm.subscribe()
+    await pm.start(["sh", "-c", "sleep 0.3; echo streamed-line; sleep 5"])
+    line = await asyncio.wait_for(q.get(), timeout=4)
+    assert line == "streamed-line"
+    await pm.stop(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_stops_delivery():
+    pm = ProcessManager()
+    q = pm.subscribe()
+    assert q in pm._subscribers
+    pm.unsubscribe(q)
+    assert q not in pm._subscribers
