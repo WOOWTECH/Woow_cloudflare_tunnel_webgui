@@ -44,3 +44,9 @@ class CloudflaredCLI:
         ])
         if rc != 0:
             raise RuntimeError(f"route dns failed for {hostname}: {err or out}")
+
+    async def ingress_validate(self, config_path: str) -> tuple[bool, str]:
+        rc, out, err = await self._run([
+            "tunnel", "--config", config_path, "ingress", "validate",
+        ])
+        return rc == 0, (err or out)

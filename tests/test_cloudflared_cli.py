@@ -83,3 +83,25 @@ async def test_route_dns_raises_on_failure(monkeypatch):
     monkeypatch.setattr(cli, "_run", fake_run)
     with pytest.raises(RuntimeError, match="zone not found"):
         await cli.route_dns("u1", "a.example.com")
+
+
+@pytest.mark.asyncio
+async def test_ingress_validate_ok(monkeypatch):
+    async def fake_run(args):
+        assert "validate" in args
+        return 0, "OK", ""
+    cli = CloudflaredCLI()
+    monkeypatch.setattr(cli, "_run", fake_run)
+    ok, output = await cli.ingress_validate("/data/config.json")
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_ingress_validate_fail(monkeypatch):
+    async def fake_run(args):
+        return 1, "", "validation error: duplicated hostname"
+    cli = CloudflaredCLI()
+    monkeypatch.setattr(cli, "_run", fake_run)
+    ok, output = await cli.ingress_validate("/data/config.json")
+    assert ok is False
+    assert "duplicated" in output
