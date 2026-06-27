@@ -21,3 +21,14 @@ async def test_captures_stdout_into_log_buffer():
     assert "line-one" in logs
     assert "line-two" in logs
     await pm.stop(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_restart_keeps_args_and_runs_again():
+    pm = ProcessManager()
+    await pm.start(["sh", "-c", "sleep 30"])
+    first_pid = pm._proc.pid
+    await pm.restart()
+    assert pm.is_running() is True
+    assert pm._proc.pid != first_pid   # 是新行程
+    await pm.stop(timeout=5)
