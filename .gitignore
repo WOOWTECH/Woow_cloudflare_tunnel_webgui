@@ -31,3 +31,6 @@ Thumbs.db
 
 # Test artifacts (keep docs/screenshots)
 tests/screenshots/
+
+# Local dev virtualenv
+.venv/
