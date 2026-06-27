@@ -313,3 +313,8 @@ def test_route_rejects_invalid_hostname(bad):
         pytest.skip("大寫會被正規化為合法,改由 2.4 驗證")
     with pytest.raises(ValidationError):
         Route(hostname=bad, service="http://x")
+
+
+def test_route_lowercases_hostname():
+    r = Route(hostname="App.Example.COM", service="http://x")
+    assert r.hostname == "app.example.com"
