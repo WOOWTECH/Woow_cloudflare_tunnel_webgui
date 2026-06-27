@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from backend.services.cloudflared_cli import CloudflaredCLI, extract_login_url
@@ -30,3 +32,28 @@ async def test_run_nonzero_rc_on_false():
     cli = CloudflaredCLI(binary="/usr/bin/false")
     rc, out, err = await cli._run([])
     assert rc != 0
+
+
+@pytest.mark.asyncio
+async def test_create_tunnel_returns_uuid(tmp_path, monkeypatch):
+    cred = tmp_path / "tunnel.json"
+
+    async def fake_run(args):
+        cred.write_text(json.dumps({"TunnelID": "uuid-xyz", "AccountTag": "a"}))
+        return 0, "Created tunnel demo with id uuid-xyz", ""
+
+    cli = CloudflaredCLI(binary="cloudflared")
+    monkeypatch.setattr(cli, "_run", fake_run)
+    uuid = await cli.create_tunnel(name="demo", cred_file=str(cred))
+    assert uuid == "uuid-xyz"
+
+
+@pytest.mark.asyncio
+async def test_create_tunnel_raises_on_failure(tmp_path, monkeypatch):
+    async def fake_run(args):
+        return 1, "", "tunnel name already exists"
+
+    cli = CloudflaredCLI()
+    monkeypatch.setattr(cli, "_run", fake_run)
+    with pytest.raises(RuntimeError, match="already exists"):
+        await cli.create_tunnel(name="demo", cred_file=str(tmp_path / "t.json"))

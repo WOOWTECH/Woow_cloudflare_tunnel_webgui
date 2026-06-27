@@ -24,3 +24,15 @@ class CloudflaredCLI:
         )
         out, err = await proc.communicate()
         return proc.returncode, out.decode(), err.decode()
+
+    async def create_tunnel(self, name: str, cred_file: str) -> str:
+        rc, out, err = await self._run([
+            "--origincert", self._origincert, "--cred-file", cred_file,
+            "tunnel", "create", name,
+        ])
+        if rc != 0:
+            raise RuntimeError(f"create tunnel failed: {err or out}")
+        import json as _json
+        from pathlib import Path as _Path
+        data = _json.loads(_Path(cred_file).read_text())
+        return data["TunnelID"]
