@@ -36,3 +36,11 @@ class CloudflaredCLI:
         from pathlib import Path as _Path
         data = _json.loads(_Path(cred_file).read_text())
         return data["TunnelID"]
+
+    async def route_dns(self, tunnel_uuid: str, hostname: str) -> None:
+        rc, out, err = await self._run([
+            "--origincert", self._origincert,
+            "tunnel", "route", "dns", "-f", tunnel_uuid, hostname,
+        ])
+        if rc != 0:
+            raise RuntimeError(f"route dns failed for {hostname}: {err or out}")

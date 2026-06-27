@@ -57,3 +57,29 @@ async def test_create_tunnel_raises_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_run", fake_run)
     with pytest.raises(RuntimeError, match="already exists"):
         await cli.create_tunnel(name="demo", cred_file=str(tmp_path / "t.json"))
+
+
+@pytest.mark.asyncio
+async def test_route_dns_passes_force_uuid_hostname(monkeypatch):
+    captured = {}
+
+    async def fake_run(args):
+        captured["args"] = args
+        return 0, "", ""
+
+    cli = CloudflaredCLI()
+    monkeypatch.setattr(cli, "_run", fake_run)
+    await cli.route_dns(tunnel_uuid="u1", hostname="a.example.com")
+    a = captured["args"]
+    assert "route" in a and "dns" in a and "-f" in a
+    assert a[-2:] == ["u1", "a.example.com"]
+
+
+@pytest.mark.asyncio
+async def test_route_dns_raises_on_failure(monkeypatch):
+    async def fake_run(args):
+        return 1, "", "zone not found"
+    cli = CloudflaredCLI()
+    monkeypatch.setattr(cli, "_run", fake_run)
+    with pytest.raises(RuntimeError, match="zone not found"):
+        await cli.route_dns("u1", "a.example.com")
