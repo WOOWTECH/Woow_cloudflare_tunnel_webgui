@@ -13,7 +13,7 @@ import os
 import pytest
 import httpx
 
-pytestmark = [pytest.mark.e2e, pytest.mark.enable_socket]
+pytestmark = [pytest.mark.e2e]
 
 BASE_URL = os.getenv("CF_TEST_URL", "http://localhost:8888")
 

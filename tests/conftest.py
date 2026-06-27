@@ -119,22 +119,6 @@ async def client(tmp_config_dir, mock_cli, mock_pm):
 
 
 # ---------------------------------------------------------------------------
-# Workaround: re-enable real sockets for tests marked enable_socket (e2e).
-# ---------------------------------------------------------------------------
-@pytest.fixture(autouse=True)
-def _allow_socket_for_e2e(request):
-    marker = request.node.get_closest_marker("enable_socket")
-    if marker is not None:
-        import pytest_socket
-
-        pytest_socket.enable_socket()
-        yield
-        pytest_socket.disable_socket(allow_unix_socket=True)
-    else:
-        yield
-
-
-# ---------------------------------------------------------------------------
 # Fixtures: live E2E base URL
 # ---------------------------------------------------------------------------
 @pytest.fixture()
