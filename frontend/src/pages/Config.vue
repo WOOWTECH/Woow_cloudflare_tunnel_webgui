@@ -11,26 +11,29 @@
       <fieldset class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <legend class="px-2 text-sm font-semibold text-gray-700">Basic Settings</legend>
         <div class="mt-2 space-y-4">
+          <!-- Mode -->
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Mode</label>
+            <p class="mb-1 text-xs text-gray-400">
+              local 使用本機憑證 (cert.pem);token 使用 Cloudflare Tunnel Token
+            </p>
+            <select
+              v-model="form.mode"
+              class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
+            >
+              <option value="local">local</option>
+              <option value="token">token</option>
+            </select>
+          </div>
+
           <!-- Tunnel Token -->
           <div>
             <label class="block text-sm font-medium text-gray-700">Tunnel Token</label>
-            <p class="mb-1 text-xs text-gray-400">Stored as podman secret, never saved to disk</p>
+            <p class="mb-1 text-xs text-gray-400">儲存在 /data,不落 settings.json。留空則保留現有 token。</p>
             <TokenInput
               :masked-value="configStore.config?.tunnel_token_masked ?? ''"
               placeholder="eyJhIjoiLi4uIiwidCI6Ii4uLiIsInMiOiIuLi4ifQ=="
               @update:token="form.tunnel_token = $event"
-            />
-          </div>
-
-          <!-- External Hostname -->
-          <div>
-            <label class="block text-sm font-medium text-gray-700">External Hostname</label>
-            <p class="mb-1 text-xs text-gray-400">The public hostname for your main service (e.g. home.example.com)</p>
-            <input
-              v-model="form.external_hostname"
-              type="text"
-              placeholder="home.example.com"
-              class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
             />
           </div>
 
@@ -45,133 +48,35 @@
               class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
             />
           </div>
-
-          <!-- Container Name -->
-          <div>
-            <label class="block text-sm font-medium text-gray-700">Container Name</label>
-            <input
-              v-model="form.container_name"
-              type="text"
-              class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
-            />
-          </div>
-
-          <!-- Container Image -->
-          <div>
-            <label class="block text-sm font-medium text-gray-700">Container Image</label>
-            <input
-              v-model="form.container_image"
-              type="text"
-              class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
-            />
-            <p class="mt-1 text-xs text-gray-400">Only cloudflare/cloudflared images allowed</p>
-          </div>
         </div>
       </fieldset>
 
-      <!-- Additional Hosts -->
+      <!-- Routes -->
       <fieldset class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <legend class="px-2 text-sm font-semibold text-gray-700">Additional Hosts</legend>
+        <legend class="px-2 text-sm font-semibold text-gray-700">Routes</legend>
         <p class="mt-1 mb-3 text-xs text-gray-400">
           Route additional hostnames through the tunnel to local services
         </p>
-        <div class="space-y-3">
-          <div
-            v-for="(host, idx) in form.additional_hosts"
-            :key="idx"
-            class="flex items-start gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3"
-          >
-            <div class="flex-1 space-y-2">
-              <div>
-                <label class="block text-xs font-medium text-gray-600">Hostname</label>
-                <input
-                  v-model="host.hostname"
-                  type="text"
-                  placeholder="app.example.com"
-                  class="mt-0.5 block w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
-                />
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-gray-600">Service</label>
-                <input
-                  v-model="host.service"
-                  type="text"
-                  placeholder="http://localhost:8080"
-                  class="mt-0.5 block w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
-                />
-              </div>
-              <div class="flex items-center gap-2">
-                <input
-                  :id="'chunked-' + idx"
-                  v-model="host.disableChunkedEncoding"
-                  type="checkbox"
-                  class="h-4 w-4 rounded border-gray-300 text-cf-orange focus:ring-cf-orange"
-                />
-                <label :for="'chunked-' + idx" class="text-xs text-gray-600">
-                  Disable chunked transfer encoding
-                </label>
-              </div>
-            </div>
-            <button
-              type="button"
-              class="mt-5 rounded p-1 text-red-400 hover:bg-red-50 hover:text-red-600"
-              title="Remove host"
-              @click="removeHost(idx)"
-            >
-              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-            </button>
-          </div>
-
-          <button
-            type="button"
-            class="flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-3 py-2 text-sm text-gray-500 hover:border-cf-orange hover:text-cf-orange"
-            @click="addHost"
-          >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-            </svg>
-            Add Host
-          </button>
-        </div>
+        <RouteEditor
+          :routes="form.routes"
+          @update:routes="form.routes = $event"
+        />
       </fieldset>
 
-      <!-- Catch-All / Nginx Proxy Manager -->
+      <!-- Catch-All Service -->
       <fieldset class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <legend class="px-2 text-sm font-semibold text-gray-700">Catch-All Service</legend>
         <div class="mt-2 space-y-4">
-          <!-- Nginx Proxy Manager -->
-          <div class="flex items-center justify-between">
-            <div>
-              <span class="text-sm font-medium text-gray-700">Nginx Proxy Manager</span>
-              <p class="text-xs text-gray-400">Enable catch-all via Nginx Proxy Manager (sets service to http://localhost:80)</p>
-            </div>
-            <button
-              type="button"
-              class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200"
-              :class="form.nginx_proxy_manager ? 'bg-cf-orange' : 'bg-gray-200'"
-              @click="form.nginx_proxy_manager = !form.nginx_proxy_manager"
-            >
-              <span
-                class="pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition-transform duration-200"
-                :class="form.nginx_proxy_manager ? 'translate-x-5' : 'translate-x-0'"
-              />
-            </button>
-          </div>
-
-          <!-- Catch-All Service URL -->
           <div>
             <label class="block text-sm font-medium text-gray-700">Catch-All Service URL</label>
             <p class="mb-1 text-xs text-gray-400">
-              Fallback service for unmatched hostnames. Overridden when Nginx Proxy Manager is enabled.
+              Fallback service for unmatched hostnames.
             </p>
             <input
               v-model="form.catch_all_service"
               type="text"
               placeholder="http://localhost:80"
-              :disabled="form.nginx_proxy_manager"
-              class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange disabled:bg-gray-100 disabled:text-gray-400"
+              class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
             />
           </div>
         </div>
@@ -200,6 +105,25 @@
             </button>
           </div>
 
+          <!-- No TLS Verify -->
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-sm font-medium text-gray-700">No TLS Verify</span>
+              <p class="text-xs text-gray-400">Skip origin TLS certificate verification (no-tls-verify)</p>
+            </div>
+            <button
+              type="button"
+              class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200"
+              :class="form.no_tls_verify ? 'bg-cf-orange' : 'bg-gray-200'"
+              @click="form.no_tls_verify = !form.no_tls_verify"
+            >
+              <span
+                class="pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition-transform duration-200"
+                :class="form.no_tls_verify ? 'translate-x-5' : 'translate-x-0'"
+              />
+            </button>
+          </div>
+
           <!-- Log Level -->
           <div>
             <label class="block text-sm font-medium text-gray-700">Log Level</label>
@@ -218,16 +142,16 @@
             </select>
           </div>
 
-          <!-- Extra Args -->
+          <!-- Run Parameters -->
           <div>
-            <label class="block text-sm font-medium text-gray-700">Extra CLI Arguments</label>
+            <label class="block text-sm font-medium text-gray-700">Run Parameters</label>
             <input
-              v-model="form.extra_args"
+              v-model="form.run_parameters"
               type="text"
               placeholder="--protocol quic --edge-ip-version auto"
               class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
             />
-            <p class="mt-1 text-xs text-gray-400">Additional cloudflared CLI flags</p>
+            <p class="mt-1 text-xs text-gray-400">Additional cloudflared run parameters</p>
           </div>
         </div>
       </fieldset>
@@ -280,63 +204,62 @@ import { reactive, onMounted, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { useTunnelStore } from '@/stores/tunnel'
 import TokenInput from '@/components/TokenInput.vue'
-import type { TunnelConfigUpdate, AdditionalHost } from '@/types'
+import RouteEditor from '@/components/RouteEditor.vue'
+import type { TunnelConfigUpdate, Route } from '@/types'
 
 const configStore = useConfigStore()
 const tunnelStore = useTunnelStore()
 
 const form = reactive<TunnelConfigUpdate>({
   tunnel_token: null,
+  mode: 'local',
+  tunnel_name: '',
+  routes: [],
+  catch_all_service: '',
   post_quantum: false,
   log_level: 'info',
-  extra_args: '',
-  container_name: 'cloudflared',
-  container_image: 'cloudflare/cloudflared:latest',
-  external_hostname: '',
-  additional_hosts: [],
-  tunnel_name: '',
-  catch_all_service: '',
-  nginx_proxy_manager: false,
+  run_parameters: '',
+  no_tls_verify: true,
 })
-
-function addHost() {
-  form.additional_hosts.push({
-    hostname: '',
-    service: '',
-    disableChunkedEncoding: false,
-  })
-}
-
-function removeHost(idx: number) {
-  form.additional_hosts.splice(idx, 1)
-}
 
 function resetForm() {
   const c = configStore.config
   if (c) {
     form.tunnel_token = null
+    form.mode = c.mode
+    form.tunnel_name = c.tunnel_name
+    form.routes = (c.routes || []).map((r: Route) => ({ ...r }))
+    form.catch_all_service = c.catch_all_service
     form.post_quantum = c.post_quantum
     form.log_level = c.log_level
-    form.extra_args = c.extra_args
-    form.container_name = c.container_name
-    form.container_image = c.container_image
-    form.external_hostname = c.external_hostname
-    form.additional_hosts = (c.additional_hosts || []).map((h: AdditionalHost) => ({ ...h }))
-    form.tunnel_name = c.tunnel_name
-    form.catch_all_service = c.catch_all_service
-    form.nginx_proxy_manager = c.nginx_proxy_manager
+    form.run_parameters = c.run_parameters
+    form.no_tls_verify = c.no_tls_verify
+  }
+}
+
+function payload(): TunnelConfigUpdate {
+  return {
+    tunnel_token: form.tunnel_token,
+    mode: form.mode,
+    tunnel_name: form.tunnel_name,
+    routes: form.routes.map((r) => ({ ...r })),
+    catch_all_service: form.catch_all_service,
+    post_quantum: form.post_quantum,
+    log_level: form.log_level,
+    run_parameters: form.run_parameters,
+    no_tls_verify: form.no_tls_verify,
   }
 }
 
 async function onSave() {
-  await configStore.updateConfig({ ...form, additional_hosts: form.additional_hosts.map(h => ({ ...h })) })
+  await configStore.updateConfig(payload())
 }
 
 async function onSaveAndRestart() {
-  await configStore.updateConfig({ ...form, additional_hosts: form.additional_hosts.map(h => ({ ...h })) })
+  await configStore.updateConfig(payload())
   if (!configStore.error) {
     await tunnelStore.action('restart').catch(() => {
-      // If container doesn't exist, start instead
+      // If process isn't running, start instead
       tunnelStore.action('start').catch(() => {})
     })
   }

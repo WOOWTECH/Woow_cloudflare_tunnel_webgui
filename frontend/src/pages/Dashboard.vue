@@ -7,12 +7,12 @@
       <TunnelStatus :status="tunnelStore.status" />
 
       <StatusCard
-        title="Podman Connection"
-        :badge="health?.podman_connected ? 'connected' : 'disconnected'"
-        :variant="health?.podman_connected ? 'green' : 'red'"
+        title="Mode"
+        :badge="configStore.config?.mode ?? 'unknown'"
+        :variant="configStore.config?.mode === 'token' ? 'green' : 'gray'"
       >
         <p class="text-sm text-gray-600">
-          {{ health?.podman_connected ? 'Socket reachable' : 'Socket unreachable' }}
+          {{ modeDescription }}
         </p>
       </StatusCard>
 
@@ -22,7 +22,7 @@
         :variant="configStore.config?.tunnel_token_masked ? 'green' : 'yellow'"
       >
         <p class="text-sm text-gray-600">
-          Secret: {{ configStore.config?.tunnel_token_secret ?? 'N/A' }}
+          {{ configStore.config?.tunnel_token_masked || 'No token configured' }}
         </p>
       </StatusCard>
     </div>
@@ -63,30 +63,26 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useTunnelStore } from '@/stores/tunnel'
 import { useConfigStore } from '@/stores/config'
 import TunnelStatus from '@/components/TunnelStatus.vue'
 import StatusCard from '@/components/StatusCard.vue'
-import type { HealthStatus } from '@/types'
 
 const tunnelStore = useTunnelStore()
 const configStore = useConfigStore()
-const health = ref<HealthStatus | null>(null)
 
-const isRunning = computed(() => tunnelStore.status?.status === 'running')
+const isRunning = computed(() => tunnelStore.status?.running === true)
 
-async function fetchHealth() {
-  try {
-    const res = await fetch('/api/health')
-    if (res.ok) health.value = await res.json()
-  } catch {
-    // silent
-  }
-}
+const modeDescription = computed(() => {
+  const mode = configStore.config?.mode
+  if (mode === 'token') return 'Token-based tunnel'
+  if (mode === 'local') return 'Local (cert-based) tunnel'
+  return 'Unknown mode'
+})
 
 onMounted(() => {
+  tunnelStore.fetchStatus()
   configStore.fetchConfig()
-  fetchHealth()
 })
 </script>

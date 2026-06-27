@@ -1,10 +1,14 @@
-export interface AdditionalHost {
-  hostname: string
-  service: string
-  disableChunkedEncoding: boolean
-}
+export type LogLevel =
+  | 'trace'
+  | 'debug'
+  | 'info'
+  | 'notice'
+  | 'warn'
+  | 'warning'
+  | 'error'
+  | 'fatal'
 
-/** A single ingress route used by the setup wizard / RouteEditor. */
+/** A single ingress route used by the setup wizard / RouteEditor / Config. */
 export interface Route {
   hostname: string
   service: string
@@ -21,65 +25,45 @@ export interface SetupStateResponse {
   mode: SetupMode
 }
 
+/** Response model for GET/PUT /api/config (aligns with backend TunnelConfigRead). */
 export interface TunnelConfig {
-  tunnel_token_secret: string
-  tunnel_token_masked: string
-  post_quantum: boolean
-  log_level: 'trace' | 'debug' | 'info' | 'notice' | 'warn' | 'warning' | 'error' | 'fatal'
-  extra_args: string
-  container_name: string
-  container_image: string
-  external_hostname: string
-  additional_hosts: AdditionalHost[]
+  mode: SetupMode
   tunnel_name: string
+  routes: Route[]
   catch_all_service: string
-  nginx_proxy_manager: boolean
+  post_quantum: boolean
+  log_level: LogLevel
+  run_parameters: string
+  no_tls_verify: boolean
+  tunnel_token_masked: string
 }
 
+/** Request body for PUT /api/config (aligns with backend TunnelConfigWrite). */
 export interface TunnelConfigUpdate {
   tunnel_token?: string | null
-  post_quantum: boolean
-  log_level: 'trace' | 'debug' | 'info' | 'notice' | 'warn' | 'warning' | 'error' | 'fatal'
-  extra_args: string
-  container_name: string
-  container_image: string
-  external_hostname: string
-  additional_hosts: AdditionalHost[]
+  mode: SetupMode
   tunnel_name: string
+  routes: Route[]
   catch_all_service: string
-  nginx_proxy_manager: boolean
+  post_quantum: boolean
+  log_level: LogLevel
+  run_parameters: string
+  no_tls_verify: boolean
 }
 
-export type ContainerStatusType =
-  | 'running'
-  | 'stopped'
-  | 'exited'
-  | 'created'
-  | 'paused'
-  | 'restarting'
-  | 'removing'
-  | 'dead'
-  | 'not_found'
-  | 'unknown'
-
+/** Response model for GET /api/tunnel/status. */
 export interface TunnelStatus {
-  status: ContainerStatusType
-  container_id: string | null
-  image: string | null
-  started_at: string | null
-  uptime_seconds: number | null
-  restart_count: number
-  exit_code: number | null
+  running: boolean
 }
 
+/** Response model for POST /api/tunnel/{start,stop,restart}. */
 export interface ActionResponse {
   success: boolean
   message: string
-  container_id?: string
 }
 
+/** Response model for GET /api/health. */
 export interface HealthStatus {
   status: string
-  podman_connected: boolean
-  tunnel_status: ContainerStatusType
+  process_running: boolean
 }

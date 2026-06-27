@@ -54,15 +54,16 @@ const links = [
 ]
 
 const statusDotClass = computed(() => {
-  const s = tunnelStore.status?.status
-  if (s === 'running') return 'bg-green-500'
-  if (s === 'exited' || s === 'stopped') return 'bg-red-500'
-  if (s === 'created') return 'bg-yellow-500'
+  const running = tunnelStore.status?.running
+  if (running === true) return 'bg-green-500'
   return 'bg-gray-400'
 })
 
 const statusLabel = computed(() => {
-  return tunnelStore.status?.status ?? 'unknown'
+  const running = tunnelStore.status?.running
+  if (running === true) return 'running'
+  if (running === false) return 'stopped'
+  return 'unknown'
 })
 
 onMounted(() => tunnelStore.startPolling(5000))
