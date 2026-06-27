@@ -49,6 +49,7 @@ const tunnelStore = useTunnelStore()
 
 const links = [
   { to: '/', label: 'Dashboard' },
+  { to: '/setup', label: 'Setup' },
   { to: '/config', label: 'Config' },
   { to: '/logs', label: 'Logs' },
 ]

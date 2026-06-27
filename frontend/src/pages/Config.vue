@@ -57,6 +57,13 @@
         <p class="mt-1 mb-3 text-xs text-gray-400">
           Route additional hostnames through the tunnel to local services
         </p>
+        <div
+          v-if="form.mode === 'token'"
+          class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700"
+        >
+          Token 模式下,ingress 路由由 Cloudflare 後台管理。以下本地路由設定僅在
+          <span class="font-medium">local</span> 模式生效。
+        </div>
         <RouteEditor
           :routes="form.routes"
           @update:routes="form.routes = $event"
