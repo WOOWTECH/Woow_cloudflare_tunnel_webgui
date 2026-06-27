@@ -43,3 +43,12 @@ def test_disable_chunked_false_written_to_origin_request():
 def test_disable_chunked_absent_not_in_origin_request():
     cfg = build_ingress_config("u", "/c", routes=[{"hostname": "h", "service": "s"}])
     assert "disableChunkedEncoding" not in cfg["ingress"][0]["originRequest"]
+
+
+def test_catch_all_service_replaces_404():
+    cfg = build_ingress_config("u", "/c", routes=[],
+                               catch_all_service="http://192.168.1.100")
+    assert cfg["ingress"][-1] == {
+        "service": "http://192.168.1.100",
+        "originRequest": {"noTLSVerify": True},
+    }
