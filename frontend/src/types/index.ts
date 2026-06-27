@@ -4,6 +4,23 @@ export interface AdditionalHost {
   disableChunkedEncoding: boolean
 }
 
+/** A single ingress route used by the setup wizard / RouteEditor. */
+export interface Route {
+  hostname: string
+  service: string
+  disableChunkedEncoding: boolean
+}
+
+export type SetupMode = 'local' | 'token'
+
+/** Shape of GET /api/setup/state. */
+export interface SetupStateResponse {
+  has_cert: boolean
+  has_tunnel: boolean
+  tunnel_uuid: string | null
+  mode: SetupMode
+}
+
 export interface TunnelConfig {
   tunnel_token_secret: string
   tunnel_token_masked: string
