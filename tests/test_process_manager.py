@@ -32,3 +32,14 @@ async def test_restart_keeps_args_and_runs_again():
     assert pm.is_running() is True
     assert pm._proc.pid != first_pid   # 是新行程
     await pm.stop(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_stop_is_idempotent_on_exited_process():
+    pm = ProcessManager()
+    await pm.start(["sh", "-c", "exit 0"])
+    await asyncio.sleep(0.2)
+    await pm.stop(timeout=5)     # 不應拋例外
+    assert pm.is_running() is False
+    await pm.stop(timeout=5)     # 再次 stop 仍安全
+    assert pm.is_running() is False
