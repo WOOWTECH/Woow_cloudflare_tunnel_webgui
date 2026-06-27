@@ -78,57 +78,31 @@ class Route(BaseModel):
 class TunnelConfigRead(BaseModel):
     """Response model for GET /api/config — token is always masked."""
 
-    tunnel_token_secret: str = Field(description="Podman secret name holding the token")
-    tunnel_token_masked: str = Field(description="Masked token value")
+    mode: TunnelMode = TunnelMode.local
+    tunnel_name: str = ""
+    routes: List[Route] = []
+    catch_all_service: str = ""
     post_quantum: bool = False
     log_level: LogLevel = LogLevel.info
-    extra_args: str = ""
-    container_name: str = "cloudflared"
-    container_image: str = "cloudflare/cloudflared:latest"
-    # HAOS-matching fields
-    external_hostname: str = ""
-    additional_hosts: List[AdditionalHost] = []
-    tunnel_name: str = ""
-    catch_all_service: str = ""
-    nginx_proxy_manager: bool = False
+    run_parameters: str = ""
+    no_tls_verify: bool = True
+    tunnel_token_masked: str = Field(default="", description="Masked token value")
 
 
 class TunnelConfigWrite(BaseModel):
     """Request model for PUT /api/config."""
 
     tunnel_token: Optional[str] = Field(
-        None, description="Raw token. If null/empty, existing secret is kept."
+        None, description="Raw token. If null/empty, existing token is kept."
     )
+    mode: TunnelMode = TunnelMode.local
+    tunnel_name: str = ""
+    routes: List[Route] = []
+    catch_all_service: str = ""
     post_quantum: bool = False
     log_level: LogLevel = LogLevel.info
-    extra_args: str = ""
-    container_name: str = "cloudflared"
-    container_image: str = "cloudflare/cloudflared:latest"
-    # HAOS-matching fields
-    external_hostname: str = ""
-    additional_hosts: List[AdditionalHost] = []
-    tunnel_name: str = ""
-    catch_all_service: str = ""
-    nginx_proxy_manager: bool = False
-
-    @field_validator("extra_args")
-    @classmethod
-    def validate_extra_args(cls, v: str) -> str:
-        if re.search(r"[;&|`$(){}]", v):
-            raise ValueError("extra_args contains disallowed shell characters")
-        return v.strip()
-
-    @field_validator("container_name")
-    @classmethod
-    def validate_container_name(cls, v: str) -> str:
-        if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$", v):
-            raise ValueError("Invalid container name")
-        return v
-
-    @field_validator("external_hostname")
-    @classmethod
-    def validate_external_hostname(cls, v: str) -> str:
-        return v.strip()
+    run_parameters: str = ""
+    no_tls_verify: bool = True
 
     @field_validator("catch_all_service")
     @classmethod
@@ -174,5 +148,4 @@ class ActionResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    podman_connected: bool
-    tunnel_status: ContainerStatus
+    process_running: bool = False

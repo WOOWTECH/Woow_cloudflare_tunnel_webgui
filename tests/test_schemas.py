@@ -93,40 +93,37 @@ class TestAdditionalHost:
 
 
 # =========================================================================
-# TunnelConfigWrite — 新增欄位與驗證器
+# TunnelConfigWrite — 本地管理新欄位
 # =========================================================================
 class TestTunnelConfigWrite:
     """驗證 TunnelConfigWrite 的所有欄位和驗證邏輯。"""
 
     def _minimal(self, **overrides):
-        base = {
-            "post_quantum": False,
-            "log_level": "info",
-            "extra_args": "",
-            "container_name": "cloudflared",
-            "container_image": "cloudflare/cloudflared:latest",
-        }
+        base = {}
         base.update(overrides)
         return TunnelConfigWrite(**base)
 
     # --- 基本預設值 ---
     def test_defaults(self):
         cfg = self._minimal()
-        assert cfg.external_hostname == ""
-        assert cfg.additional_hosts == []
+        assert cfg.mode.value == "local"
         assert cfg.tunnel_name == ""
+        assert cfg.routes == []
         assert cfg.catch_all_service == ""
-        assert cfg.nginx_proxy_manager is False
+        assert cfg.post_quantum is False
+        assert cfg.log_level == LogLevel.info
+        assert cfg.run_parameters == ""
+        assert cfg.no_tls_verify is True
         assert cfg.tunnel_token is None
 
-    # --- external_hostname ---
-    def test_external_hostname_set(self):
-        cfg = self._minimal(external_hostname="home.example.com")
-        assert cfg.external_hostname == "home.example.com"
+    # --- mode ---
+    def test_mode_token(self):
+        cfg = self._minimal(mode="token")
+        assert cfg.mode.value == "token"
 
-    def test_external_hostname_stripped(self):
-        cfg = self._minimal(external_hostname="  home.example.com  ")
-        assert cfg.external_hostname == "home.example.com"
+    def test_invalid_mode_rejected(self):
+        with pytest.raises(ValidationError):
+            self._minimal(mode="bogus")
 
     # --- tunnel_name ---
     def test_tunnel_name_set(self):
@@ -142,24 +139,22 @@ class TestTunnelConfigWrite:
         cfg = self._minimal(catch_all_service="  http://localhost:80  ")
         assert cfg.catch_all_service == "http://localhost:80"
 
-    # --- nginx_proxy_manager ---
-    def test_nginx_proxy_manager_true(self):
-        cfg = self._minimal(nginx_proxy_manager=True)
-        assert cfg.nginx_proxy_manager is True
+    # --- no_tls_verify ---
+    def test_no_tls_verify_false(self):
+        cfg = self._minimal(no_tls_verify=False)
+        assert cfg.no_tls_verify is False
 
-    # --- additional_hosts ---
-    def test_additional_hosts_single(self):
+    # --- routes ---
+    def test_routes_single(self):
         cfg = self._minimal(
-            additional_hosts=[
-                {"hostname": "app.test.io", "service": "http://localhost:3000"}
-            ]
+            routes=[{"hostname": "app.test.io", "service": "http://localhost:3000"}]
         )
-        assert len(cfg.additional_hosts) == 1
-        assert cfg.additional_hosts[0].hostname == "app.test.io"
+        assert len(cfg.routes) == 1
+        assert cfg.routes[0].hostname == "app.test.io"
 
-    def test_additional_hosts_multiple(self):
+    def test_routes_multiple(self):
         cfg = self._minimal(
-            additional_hosts=[
+            routes=[
                 {"hostname": "a.test.io", "service": "http://localhost:3000"},
                 {
                     "hostname": "b.test.io",
@@ -168,63 +163,22 @@ class TestTunnelConfigWrite:
                 },
             ]
         )
-        assert len(cfg.additional_hosts) == 2
-        assert cfg.additional_hosts[1].disableChunkedEncoding is True
+        assert len(cfg.routes) == 2
+        assert cfg.routes[1].disableChunkedEncoding is True
 
-    def test_additional_hosts_invalid_entry_rejected(self):
+    def test_routes_invalid_hostname_rejected(self):
+        with pytest.raises(ValidationError):
+            self._minimal(routes=[{"hostname": "", "service": "http://localhost:3000"}])
+
+    def test_routes_hostname_with_port_rejected(self):
         with pytest.raises(ValidationError):
             self._minimal(
-                additional_hosts=[
-                    {"hostname": "", "service": "http://localhost:3000"}
-                ]
+                routes=[{"hostname": "app.test.io:8123", "service": "http://x"}]
             )
 
-    def test_additional_hosts_empty_list_ok(self):
-        cfg = self._minimal(additional_hosts=[])
-        assert cfg.additional_hosts == []
-
-    # --- extra_args 注入防護 ---
-    @pytest.mark.parametrize(
-        "bad_args",
-        [
-            "--flag; rm -rf /",
-            "--flag & wget evil",
-            "--flag | cat /etc/passwd",
-            "--flag `whoami`",
-            "--flag $(id)",
-            "--flag(){echo}",
-        ],
-    )
-    def test_extra_args_shell_injection_rejected(self, bad_args):
-        with pytest.raises(ValidationError) as exc_info:
-            self._minimal(extra_args=bad_args)
-        assert "disallowed shell characters" in str(exc_info.value)
-
-    def test_extra_args_safe_value(self):
-        cfg = self._minimal(extra_args="--protocol quic --edge-ip-version auto")
-        assert cfg.extra_args == "--protocol quic --edge-ip-version auto"
-
-    # --- container_name 驗證 ---
-    @pytest.mark.parametrize(
-        "bad_name",
-        [
-            "",
-            "-invalid",
-            ".invalid",
-            "_invalid",
-            "name with spaces",
-            "name;inject",
-            "name&inject",
-        ],
-    )
-    def test_container_name_invalid_rejected(self, bad_name):
-        with pytest.raises(ValidationError):
-            self._minimal(container_name=bad_name)
-
-    def test_container_name_valid_variants(self):
-        for name in ["cloudflared", "cf-tunnel-1", "my_tunnel.v2", "Tunnel123"]:
-            cfg = self._minimal(container_name=name)
-            assert cfg.container_name == name
+    def test_routes_empty_list_ok(self):
+        cfg = self._minimal(routes=[])
+        assert cfg.routes == []
 
     # --- log_level ---
     def test_all_log_levels_accepted(self):
@@ -243,21 +197,24 @@ class TestTunnelConfigWrite:
 class TestTunnelConfigRead:
     def test_read_includes_new_fields(self):
         cfg = TunnelConfigRead(
-            tunnel_token_secret="cf-tunnel-token",
-            tunnel_token_masked="****",
-            external_hostname="home.example.com",
-            additional_hosts=[
-                AdditionalHost(hostname="a.io", service="http://localhost:80")
-            ],
+            mode="local",
             tunnel_name="my-tunnel",
+            routes=[Route(hostname="a.io", service="http://localhost:80")],
             catch_all_service="http://localhost:80",
-            nginx_proxy_manager=True,
+            no_tls_verify=True,
+            tunnel_token_masked="********",
         )
-        assert cfg.external_hostname == "home.example.com"
-        assert len(cfg.additional_hosts) == 1
+        assert cfg.mode.value == "local"
         assert cfg.tunnel_name == "my-tunnel"
+        assert len(cfg.routes) == 1
         assert cfg.catch_all_service == "http://localhost:80"
-        assert cfg.nginx_proxy_manager is True
+        assert cfg.tunnel_token_masked == "********"
+
+    def test_read_defaults(self):
+        cfg = TunnelConfigRead()
+        assert cfg.mode.value == "local"
+        assert cfg.routes == []
+        assert cfg.tunnel_token_masked == ""
 
 
 # =========================================================================
