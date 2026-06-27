@@ -1,4 +1,6 @@
-from backend.services.cloudflared_cli import extract_login_url
+import pytest
+
+from backend.services.cloudflared_cli import CloudflaredCLI, extract_login_url
 
 
 def test_extract_login_url_finds_argotunnel_url():
@@ -13,3 +15,18 @@ def test_extract_login_url_finds_argotunnel_url():
 
 def test_extract_login_url_returns_none_when_absent():
     assert extract_login_url("no url here") is None
+
+
+@pytest.mark.asyncio
+async def test_run_returns_stdout_and_zero_rc():
+    cli = CloudflaredCLI(binary="/bin/echo")
+    rc, out, err = await cli._run(["hello"])
+    assert rc == 0
+    assert out.strip() == "hello"
+
+
+@pytest.mark.asyncio
+async def test_run_nonzero_rc_on_false():
+    cli = CloudflaredCLI(binary="/usr/bin/false")
+    rc, out, err = await cli._run([])
+    assert rc != 0
