@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette_csrf import CSRFMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from .routers import config, tunnel, logs, health
+from .routers import config, tunnel, logs, health, setup
 
 app = FastAPI(
     title="Cloudflare Tunnel GUI",
@@ -89,6 +89,7 @@ app.include_router(config.router)
 app.include_router(tunnel.router)
 app.include_router(logs.router)
 app.include_router(health.router)
+app.include_router(setup.router)
 
 # ── Static Files + SPA Fallback ─────────────────────────
 STATIC_DIR = Path("/app/static")

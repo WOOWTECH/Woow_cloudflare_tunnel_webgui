@@ -1,14 +1,15 @@
 """
-Shared fixtures for the Cloudflare Tunnel Web GUI test suite.
+Shared fixtures for the Cloudflare Tunnel Web GUI test suite (本地管理版).
 
 Two test modes:
-  1. Unit / integration: pytest with httpx TestClient (mocked Podman)
+  1. Unit / integration: pytest with httpx TestClient (mocked CloudflaredCLI / ProcessManager)
   2. E2E live:          pytest -m e2e against the running container
 """
 
 import os
+import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -16,8 +17,6 @@ from httpx import ASGITransport, AsyncClient
 # ---------------------------------------------------------------------------
 # Make backend importable from repo root
 # ---------------------------------------------------------------------------
-import sys
-
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
@@ -28,14 +27,15 @@ os.environ.setdefault("CSRF_SECRET", "test-csrf-secret-for-pytest")
 from backend.routers import config as config_router  # noqa: E402
 from backend.routers import health as health_router  # noqa: E402
 from backend.routers import tunnel as tunnel_router  # noqa: E402
+from backend.routers import setup as setup_router  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Fixtures: temp config dir & ConfigManager override
+# Fixtures: temp config dir
 # ---------------------------------------------------------------------------
 @pytest.fixture()
 def tmp_config_dir(tmp_path):
-    """Provide a temp directory that acts as /app/config."""
+    """Provide a temp directory that acts as /app/config or /data."""
     return tmp_path
 
 
@@ -46,56 +46,61 @@ def settings_file(tmp_config_dir):
 
 
 # ---------------------------------------------------------------------------
-# Fixtures: mock PodmanManager so tests don't need a real socket
-#
-# DEPRECATED (待 Phase 6 移除): Podman 相關 fixtures(mock_podman 及其在
-# client fixture 中的使用)會在 Phase 6 去 Podman 化時一併移除。目前暫時
-# 保留以免既有測試 import 爆掉;不要在新測試中依賴它們。
+# Fixtures: mock CloudflaredCLI / ProcessManager replacements
 # ---------------------------------------------------------------------------
 @pytest.fixture()
-def mock_podman():
-    mgr = MagicMock()
-    mgr.secret_get_masked.return_value = "****mask****"
-    mgr.secret_set.return_value = None
-    mgr.ping.return_value = True
-    mgr.secret_exists.return_value = True
-    mgr.get_status.return_value = {
-        "status": "running",
-        "container_id": "abc123",
-        "image": "cloudflare/cloudflared:latest",
-        "started_at": "2026-01-01T00:00:00Z",
-        "uptime_seconds": 3600,
-        "restart_count": 0,
-        "exit_code": 0,
-    }
-    mgr.start_container.return_value = "abc123"
-    mgr.stop_container.return_value = True
-    mgr.restart_container.return_value = True
-    return mgr
+def mock_cli():
+    cli = MagicMock()
+
+    async def _login(src_cert, dest_cert):
+        yield "https://dash.cloudflare.com/argotunnel?aud=test"
+
+    cli.login = _login
+    cli.create_tunnel = AsyncMock(return_value="uuid-test")
+    cli.route_dns = AsyncMock(return_value=None)
+    cli.ingress_validate = AsyncMock(return_value=(True, "OK"))
+    return cli
+
+
+@pytest.fixture()
+def mock_pm():
+    pm = MagicMock()
+    pm.is_running.return_value = True
+    pm.start = AsyncMock(return_value=None)
+    pm.stop = AsyncMock(return_value=None)
+    pm.restart = AsyncMock(return_value=None)
+    pm.recent_logs.return_value = ["log line 1"]
+    return pm
 
 
 # ---------------------------------------------------------------------------
 # Fixtures: FastAPI TestClient with mocked dependencies
 # ---------------------------------------------------------------------------
 @pytest.fixture()
-async def client(tmp_config_dir, mock_podman):
+async def client(tmp_config_dir, mock_cli, mock_pm):
     """
     Async httpx client wired to the real FastAPI app with:
       - ConfigManager writing to tmp dir (not /app/config)
-      - PodmanManager mocked
+      - TokenStore writing to tmp dir (not /data)
+      - CloudflaredCLI / ProcessManager mocked
       - CSRF disabled via exempt patterns
     """
     from backend.services.config_manager import ConfigManager
+    from backend.services.token_store import TokenStore
 
     test_cfg_mgr = ConfigManager(config_path=tmp_config_dir / "settings.json")
+    test_token_store = TokenStore(path=tmp_config_dir / ".tunnel_token")
 
     with (
         patch.object(config_router, "config_mgr", test_cfg_mgr),
-        patch.object(config_router, "podman_mgr", mock_podman),
-        patch.object(health_router, "config_mgr", test_cfg_mgr),
-        patch.object(health_router, "podman_mgr", mock_podman),
+        patch.object(config_router, "token_store", test_token_store),
         patch.object(tunnel_router, "config_mgr", test_cfg_mgr),
-        patch.object(tunnel_router, "podman_mgr", mock_podman),
+        patch.object(tunnel_router, "pm", mock_pm),
+        patch.object(tunnel_router, "token_store", test_token_store),
+        patch.object(health_router, "pm", mock_pm),
+        patch.object(setup_router, "config_mgr", test_cfg_mgr),
+        patch.object(setup_router, "cli", mock_cli),
+        patch.object(setup_router, "pm", mock_pm),
     ):
         from backend.main import app
 
@@ -114,16 +119,14 @@ async def client(tmp_config_dir, mock_podman):
 
 
 # ---------------------------------------------------------------------------
-# Workaround: pytest-homeassistant-custom-component unconditionally calls
-# pytest_socket.disable_socket() in its own pytest_runtest_setup hook,
-# overriding the enable_socket marker.  Re-enable sockets for e2e tests.
+# Workaround: re-enable real sockets for tests marked enable_socket (e2e).
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def _allow_socket_for_e2e(request):
-    """Re-enable real sockets for tests marked with @pytest.mark.enable_socket."""
     marker = request.node.get_closest_marker("enable_socket")
     if marker is not None:
         import pytest_socket
+
         pytest_socket.enable_socket()
         yield
         pytest_socket.disable_socket(allow_unix_socket=True)
