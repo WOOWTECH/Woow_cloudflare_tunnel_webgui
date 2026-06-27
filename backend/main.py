@@ -1,5 +1,7 @@
 import os
 import re
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -10,12 +12,43 @@ from starlette_csrf import CSRFMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .routers import config, tunnel, logs, health, setup
+from .services.process_manager import autostart_args
+
+logger = logging.getLogger(__name__)
+DATA_DIR = Path("/data")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # On startup: auto-resume the tunnel if already configured (reboot parity).
+    try:
+        cfg = await tunnel.config_mgr.load()
+        args = autostart_args(
+            cfg,
+            token=tunnel.token_store.get(),
+            cert_exists=(DATA_DIR / "cert.pem").exists(),
+            tunnel_exists=(DATA_DIR / "tunnel.json").exists(),
+            config_exists=(DATA_DIR / "config.json").exists(),
+        )
+        if args and not tunnel.pm.is_running():
+            logger.info("Autostarting cloudflared (mode=%s)", cfg.get("mode"))
+            await tunnel.pm.start(args)
+    except Exception as exc:  # never block app startup on autostart failure
+        logger.warning("Tunnel autostart skipped: %s", exc)
+    yield
+    # On shutdown: stop the cloudflared child process cleanly.
+    try:
+        await tunnel.pm.stop()
+    except Exception:
+        pass
+
 
 app = FastAPI(
     title="Cloudflare Tunnel GUI",
     version="1.0.0",
     docs_url="/api/docs",
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 # ── Global Exception Handler ────────────────────────────

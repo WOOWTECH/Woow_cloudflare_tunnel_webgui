@@ -65,3 +65,33 @@ def test_build_run_args_appends_post_quantum_and_loglevel():
                           post_quantum=True, log_level="debug")
     assert "--post-quantum" in args
     assert args[args.index("--loglevel") + 1] == "debug"
+
+
+# ── autostart_args ─────────────────────────────────────────
+from backend.services.process_manager import autostart_args
+
+
+def test_autostart_token_mode_with_token_returns_args():
+    args = autostart_args({"mode": "token"}, token="TOK",
+                          cert_exists=False, tunnel_exists=False, config_exists=False)
+    assert args is not None
+    assert "--token" in args and "TOK" in args
+
+
+def test_autostart_token_mode_without_token_returns_none():
+    args = autostart_args({"mode": "token"}, token=None,
+                          cert_exists=False, tunnel_exists=False, config_exists=False)
+    assert args is None
+
+
+def test_autostart_local_mode_all_files_present_returns_args():
+    args = autostart_args({"mode": "local", "tunnel_name": "demo"}, token=None,
+                          cert_exists=True, tunnel_exists=True, config_exists=True)
+    assert args is not None
+    assert args[-2:] == ["run", "demo"]
+
+
+def test_autostart_local_mode_missing_config_returns_none():
+    args = autostart_args({"mode": "local", "tunnel_name": "demo"}, token=None,
+                          cert_exists=True, tunnel_exists=True, config_exists=False)
+    assert args is None

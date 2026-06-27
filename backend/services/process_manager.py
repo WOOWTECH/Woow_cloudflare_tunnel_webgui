@@ -73,3 +73,36 @@ def build_run_args(
         args.extend(["--origincert", origincert, "--config", config,
                      "run", tunnel_name])
     return args
+
+
+def autostart_args(
+    cfg: dict,
+    token: str | None,
+    cert_exists: bool,
+    tunnel_exists: bool,
+    config_exists: bool,
+    binary: str = "cloudflared",
+) -> list[str] | None:
+    """Return cloudflared run args if the tunnel is fully configured, else None.
+
+    Used at container startup to auto-resume the tunnel (parity with the old
+    auto-running connector). Token mode needs a token; local mode needs the
+    cert, tunnel credentials, and generated ingress config all present.
+    """
+    mode = cfg.get("mode", "local")
+    if mode == "token":
+        if not token:
+            return None
+        return build_run_args(
+            mode="token", token=token, binary=binary,
+            post_quantum=cfg.get("post_quantum", False),
+            log_level=cfg.get("log_level", "info"),
+        )
+    if cert_exists and tunnel_exists and config_exists:
+        return build_run_args(
+            mode="local", binary=binary,
+            tunnel_name=cfg.get("tunnel_name", ""),
+            post_quantum=cfg.get("post_quantum", False),
+            log_level=cfg.get("log_level", "info"),
+        )
+    return None
