@@ -136,6 +136,13 @@ class TunnelConfigWrite(BaseModel):
         return v.strip()
 
 
+class SetupState(BaseModel):
+    has_cert: bool
+    has_tunnel: bool
+    tunnel_uuid: Optional[str] = None
+    mode: TunnelMode = TunnelMode.local
+
+
 class ContainerStatus(str, Enum):
     running = "running"
     stopped = "stopped"

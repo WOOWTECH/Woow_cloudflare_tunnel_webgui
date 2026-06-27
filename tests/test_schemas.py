@@ -318,3 +318,14 @@ def test_route_rejects_invalid_hostname(bad):
 def test_route_lowercases_hostname():
     r = Route(hostname="App.Example.COM", service="http://x")
     assert r.hostname == "app.example.com"
+
+
+from backend.models.schemas import SetupState
+
+
+def test_setup_state_serializes():
+    s = SetupState(has_cert=False, has_tunnel=False, tunnel_uuid=None,
+                   mode=TunnelMode.local)
+    d = s.model_dump()
+    assert d == {"has_cert": False, "has_tunnel": False,
+                 "tunnel_uuid": None, "mode": "local"}
