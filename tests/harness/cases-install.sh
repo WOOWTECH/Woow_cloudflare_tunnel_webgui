@@ -1,6 +1,7 @@
 # shellcheck shell=bash
-# tests/harness/cases-install.sh: scripts/install.sh and scripts/auth-passwd.sh cases
-# (sourced by run-all.sh). Each case_* function returns the number of failed assertions.
+# tests/harness/cases-install.sh: cases for scripts/install.sh, scripts/uninstall.sh and
+# scripts/auth-passwd.sh (sourced by run-all.sh). Each case_* function returns the number
+# of failed assertions.
 
 STAGED() { printf '%s' "$HOME/.local/state/woow-cf-tunnel/staged"; }
 valid_htpasswd() {
@@ -162,6 +163,46 @@ case_install_dry_run_changes_nothing() {
   return "$A_FAILS"
 }
 
+case_uninstall_keeps_the_data_volume() {
+  sandbox uninstall-keep
+  env_file
+  t "$R/scripts/install.sh"
+  : >"$MOCK_STATE/calls.log"
+  t "$R/scripts/uninstall.sh"
+  tnot test -e "$(QDIR)/woow-cf-tunnel.container"
+  tnot test -e "$(QDIR)/woow-cf-tunnel-data.volume"
+  t test "$(cat "$MOCK_STATE/units/woow-cf-tunnel.service/active")" = 0
+  t test "$(calls 'podman volume rm')" = 0
+  t test -f "$HOME/.config/woow-cf-tunnel/woow-cf-tunnel.env"
+  return "$A_FAILS"
+}
+
+case_uninstall_purge_backs_up_then_removes_the_volume() {
+  sandbox uninstall-purge
+  env_file
+  t "$R/scripts/install.sh"
+  : >"$MOCK_STATE/calls.log"
+  t "$R/scripts/uninstall.sh" --purge --yes
+  t test "$(calls 'podman volume export cf_data')" -ge 1
+  t test "$(calls 'podman volume rm cf_data')" = 1
+  tnot test -e "$(QDIR)/woow-cf-tunnel.container"
+  t test "$(find "$HOME/backups" -name 'cf_data-*.tar' | wc -l)" -ge 1
+  return "$A_FAILS"
+}
+
+case_uninstall_refuses_over_a_tunnel_ssh_session() {
+  sandbox uninstall-session
+  env_file
+  t "$R/scripts/install.sh"
+  export SSH_CONNECTION="::1 50000 ::1 22"
+  local out
+  out=$("$R/scripts/uninstall.sh" 2>&1) && { echo "  uninstall ran over a tunnel session"; A_FAILS=$((A_FAILS + 1)); }
+  t grep -q 'reconnect over another path\|Reconnect over another path' <<<"$out"
+  t test -e "$(QDIR)/woow-cf-tunnel.container"
+  t test "$(cat "$MOCK_STATE/units/woow-cf-tunnel.service/active")" = 1
+  return "$A_FAILS"
+}
+
 # shellcheck disable=SC2034 # read by run-all.sh
 INSTALL_CASES=(
   case_install_first_run_creates_env_and_stops
@@ -174,4 +215,7 @@ INSTALL_CASES=(
   case_install_auth_refuses_malformed_htpasswd
   case_install_auth_adds_proxy_without_touching_the_tunnel
   case_install_dry_run_changes_nothing
+  case_uninstall_keeps_the_data_volume
+  case_uninstall_purge_backs_up_then_removes_the_volume
+  case_uninstall_refuses_over_a_tunnel_ssh_session
 )
