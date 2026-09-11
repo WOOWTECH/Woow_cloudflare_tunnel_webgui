@@ -34,6 +34,18 @@ def test_unset_masked_is_empty_string(tmp_path):
     assert store.get_masked() == ""
 
 
+def test_set_strips_surrounding_whitespace(tmp_path):
+    # A token pasted from the dashboard often carries a trailing newline.
+    store = TokenStore(path=tmp_path / ".tunnel_token")
+    store.set("  eyJhIjoiYiJ9\n")
+    assert store.get() == "eyJhIjoiYiJ9"
+
+
+def test_path_is_exposed_for_cloudflared_token_file(tmp_path):
+    store = TokenStore(path=tmp_path / ".tunnel_token")
+    assert store.path == tmp_path / ".tunnel_token"
+
+
 def test_set_writes_file_with_0600_permissions(tmp_path):
     path = tmp_path / ".tunnel_token"
     store = TokenStore(path=path)

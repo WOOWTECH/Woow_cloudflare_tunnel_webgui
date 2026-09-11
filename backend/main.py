@@ -12,7 +12,7 @@ from starlette_csrf import CSRFMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .routers import config, tunnel, logs, health, setup
-from .services.process_manager import autostart_args
+from .services.process_manager import autostart_args, metrics_addr
 
 logger = logging.getLogger(__name__)
 DATA_DIR = Path("/data")
@@ -29,6 +29,8 @@ async def lifespan(app: FastAPI):
             cert_exists=(DATA_DIR / "cert.pem").exists(),
             tunnel_exists=(DATA_DIR / "tunnel.json").exists(),
             config_exists=(DATA_DIR / "config.json").exists(),
+            token_file=str(tunnel.token_store.path),
+            metrics=metrics_addr(),
         )
         if args and not tunnel.pm.is_running():
             logger.info("Autostarting cloudflared (mode=%s)", cfg.get("mode"))

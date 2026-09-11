@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from ..models.schemas import SetupState, TunnelMode
 from ..services.config_builder import build_ingress_config, write_config_json
-from ..services.process_manager import build_run_args
+from ..services.process_manager import build_run_args, metrics_addr
 from ..services.instances import pm, config_mgr, cli
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
@@ -106,6 +106,7 @@ async def apply(req: ApplyReq):
         tunnel_name=cfg.get("tunnel_name", ""),
         post_quantum=cfg.get("post_quantum", False),
         log_level=cfg.get("log_level", "info"),
+        metrics=metrics_addr(),
     )
     if pm.is_running():
         await pm.restart()

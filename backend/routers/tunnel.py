@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from ..services.process_manager import build_run_args
+from ..services.process_manager import build_run_args, metrics_addr
 from ..services.instances import pm, config_mgr, token_store
 
 router = APIRouter(prefix="/api/tunnel", tags=["tunnel"])
@@ -16,10 +16,11 @@ async def start_tunnel():
     cfg = await config_mgr.load()
     args = build_run_args(
         mode=cfg.get("mode", "local"),
-        token=token_store.get() or "",
+        token_file=str(token_store.path),
         tunnel_name=cfg.get("tunnel_name", ""),
         post_quantum=cfg.get("post_quantum", False),
         log_level=cfg.get("log_level", "info"),
+        metrics=metrics_addr(),
     )
     await pm.start(args)
     return {"success": True, "message": "Tunnel started"}

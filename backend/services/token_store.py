@@ -5,14 +5,22 @@ from typing import Optional
 
 
 class TokenStore:
-    """Store the raw tunnel token on disk with 0600 permissions."""
+    """Store the raw tunnel token on disk with 0600 permissions.
+
+    cloudflared reads this file itself (`run --token-file`), so the token never
+    appears in a process argv.
+    """
 
     def __init__(self, path: "Path | str" = "/data/.tunnel_token"):
         self._path = Path(path)
 
+    @property
+    def path(self) -> Path:
+        return self._path
+
     def set(self, value: str) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(value)
+        self._path.write_text(value.strip())
         os.chmod(self._path, 0o600)
 
     def get(self) -> Optional[str]:
