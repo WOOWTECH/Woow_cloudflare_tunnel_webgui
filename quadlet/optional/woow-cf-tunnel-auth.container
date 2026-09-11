@@ -1,0 +1,45 @@
+# woow-cf-tunnel-auth (OPTIONAL): HTTP Basic-auth front door for the GUI.
+#
+# The GUI has no login of its own and can stop the tunnel or replace its token.
+# Anything that routes to it (a tunnel hostname, the LAN) must go through this unit
+# or through Cloudflare Access. Installed by `scripts/install.sh --with-auth`, which
+# first validates the htpasswd file (exists, non-empty, only bcrypt / sha512-crypt /
+# sha256-crypt / apr1 lines, mode 0640, group = the nginx subgid) and renders
+# ~/.config/woow-cf-tunnel/auth-nginx.conf (listen address + GUI port).
+#
+# The Assert lines replace the failure mode of the removed 2026 sidecar, which
+# crash-looped because a missing bind-mount source makes "podman run" fail every
+# RestartSec. A failed Assert fails the start job once, logs why, and does not
+# trigger Restart=. Nothing here touches the tunnel unit: no Requires=, no BindsTo=.
+
+[Unit]
+Description=Basic-auth proxy for the Cloudflare Tunnel Web GUI (woow-cf-tunnel-auth)
+Documentation=https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui
+After=woow-cf-tunnel.service
+AssertFileNotEmpty=@@AUTH_HTPASSWD@@
+AssertFileNotEmpty=%h/.config/woow-cf-tunnel/auth-nginx.conf
+
+[Container]
+ContainerName=woow-cf-tunnel-auth
+Image=docker.io/library/nginx:1.30.4-alpine
+Pull=missing
+# Host network so it can reach the loopback-only GUI. The listen address (default
+# 127.0.0.1:8888; LAN only with an explicit AUTH_LISTEN=0.0.0.0:<port>) is in the
+# rendered auth-nginx.conf.
+Network=host
+Volume=%h/.config/woow-cf-tunnel/auth-nginx.conf:/etc/nginx/nginx.conf:ro
+Volume=@@AUTH_HTPASSWD@@:/etc/nginx/htpasswd:ro
+NoNewPrivileges=true
+DropCapability=all
+# The master switches workers to user nginx (SETUID, SETGID) and creates its temp
+# dirs for them (CHOWN, DAC_OVERRIDE). Verified by the CI e2e job.
+AddCapability=CHOWN DAC_OVERRIDE SETGID SETUID
+Label=io.woowtech.app=woow-cf-tunnel
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

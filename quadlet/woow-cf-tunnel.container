@@ -1,0 +1,73 @@
+# woow-cf-tunnel: Cloudflare Tunnel Web GUI + the cloudflared connector it supervises.
+#
+# One container runs the FastAPI/Vue GUI and cloudflared as a child process. On hosts
+# where the tunnel carries the SSH route, this unit is the primary remote path: restart
+# it only through scripts/upgrade.sh, which detaches and rolls back on failure.
+# scripts/install.sh starts it when it is stopped but never restarts it.
+#
+# scripts/install.sh renders the per-host values (from ~/.config/woow-cf-tunnel/
+# woow-cf-tunnel.env, plus the image tag computed from VERSION and the git commit)
+# and installs the result. Quadlet in podman 4.9.3 ignores .d/ drop-ins, so re-run
+# install.sh instead of editing the installed copy.
+#
+# No EnvironmentFile= on purpose: the container needs no secrets, and a deleted env
+# file must never keep the tunnel (possibly your SSH path) from starting.
+#
+# The unit is not named after the legacy hand-written cf-tunnel-webgui.service: a file
+# in ~/.config/systemd/user shadows a generated unit of the same name.
+
+[Unit]
+Description=Cloudflare Tunnel Web GUI and cloudflared connector (woow-cf-tunnel)
+Documentation=https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui
+# Never give up restarting: this unit may be the only remote route to the host.
+StartLimitIntervalSec=0
+
+[Container]
+ContainerName=woow-cf-tunnel
+# Built from this checkout by install.sh / upgrade.sh (localhost/woow-cf-tunnel:<VERSION>-<sha12>).
+Image=@@CF_IMAGE@@
+Pull=never
+
+# cloudflared must reach origins on the host's localhost (HA :8123, SSH :22, ...).
+Network=host
+
+# settings.json, .tunnel_token (0600) and .csrf_secret. The .volume unit's VolumeName=
+# adopts an existing volume in place.
+Volume=woow-cf-tunnel-data.volume:/data
+
+# The GUI has no login and can replace the tunnel token: it is pinned to loopback and
+# never rendered. Reach it through an SSH port-forward, Cloudflare Access, or the
+# optional woow-cf-tunnel-auth proxy.
+Environment=UVICORN_HOST=127.0.0.1
+Environment=UVICORN_PORT=@@UVICORN_PORT@@
+# cloudflared --metrics address (loopback): /ready feeds the healthcheck below.
+Environment=CF_METRICS_ADDR=@@CF_METRICS_ADDR@@
+# No --host/--port: uvicorn reads UVICORN_HOST / UVICORN_PORT.
+Exec=uvicorn backend.main:app
+
+NoNewPrivileges=true
+DropCapability=all
+
+# Liveness: backend /api/health AND, when a tunnel is configured, cloudflared /ready
+# (>= 1 edge connection). Three failures kill the container; Restart=always brings it
+# back and the app autostarts cloudflared.
+HealthCmd=/usr/local/bin/cf-webui-healthcheck
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=60s
+HealthOnFailure=kill
+
+Label=io.woowtech.app=woow-cf-tunnel
+# StopTimeout= is not a Quadlet key in podman 4.9.3. 20s bounds a restart's outage;
+# long-lived streams (SSH, websockets) never drain anyway.
+PodmanArgs=--stop-timeout=20
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+TimeoutStopSec=40
+
+[Install]
+WantedBy=default.target
