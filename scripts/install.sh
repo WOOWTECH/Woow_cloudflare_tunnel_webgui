@@ -171,7 +171,9 @@ check_htpasswd() {
   bad=$(grep -vnE '^[A-Za-z0-9._@-]+:\$(2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}|6\$[^$:]+\$[./A-Za-z0-9]{86}|5\$[^$:]+\$[./A-Za-z0-9]{43}|apr1\$[./A-Za-z0-9]{1,8}\$[./A-Za-z0-9]{22})$' "$HTPASSWD" | cut -d: -f1 | tr '\n' ' ' || true)
   [[ -z $bad ]] || ql_die "--with-auth: $HTPASSWD has malformed line(s) $bad(want user:bcrypt | sha512-crypt | sha256-crypt | apr1)"
   if ! unit_up "$AUTH_UNIT" && port_busy "${AUTH_LISTEN##*:}"; then
-    ql_die "--with-auth: port ${AUTH_LISTEN##*:} is already in use (set AUTH_LISTEN in $ENV_FILE)"
+    # --stage: a migration may take over the port the legacy GUI listens on
+    if ((stage)); then ql_warn "--with-auth: port ${AUTH_LISTEN##*:} is in use now; it must be free when the auth proxy starts"
+    else ql_die "--with-auth: port ${AUTH_LISTEN##*:} is already in use (set AUTH_LISTEN in $ENV_FILE)"; fi
   fi
   if ((dry)); then ql_info "[dry-run] would set $HTPASSWD to mode 0640, group = nginx subgid"; return 0; fi
   chmod 640 "$HTPASSWD"
