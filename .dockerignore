@@ -6,3 +6,4 @@ backend/__pycache__
 *.pyc
 .git
 .env
+.venv
