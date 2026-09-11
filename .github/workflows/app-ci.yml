@@ -1,0 +1,106 @@
+# .github/workflows/app-ci.yml: repo-specific CI. The vendored quadlet-ci.yml does the
+# static Quadlet work (dry-run + systemd-analyze, shellcheck, the lib checksum); this
+# workflow covers the app, the mocked script harness, the image, and a real Quadlet
+# install with the liveness chain that HealthOnFailure=kill relies on.
+name: app-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - name: pytest (backend + healthcheck)
+        run: python -m pytest -m "not e2e" -q
+
+  scripts:
+    runs-on: ubuntu-24.04 # apt podman = 4.9.3, systemd 255: the WOOWTECH host versions
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y podman shellcheck
+          podman --version
+      - name: shellcheck the test harness
+        run: shellcheck -x -P tests/harness tests/harness/*.sh tests/harness/bin/*
+      - name: install / migrate / upgrade harness (mocked podman and systemd)
+        run: tests/harness/run-all.sh
+      - name: cloudflared version policy
+        run: |
+          v=$(sed -n 's/^ARG CLOUDFLARED_VERSION=//p' Dockerfile)
+          echo "pinned cloudflared: $v"
+          case "$v" in
+            2026.8.0 | 2026.8.1)
+              echo "::error::cloudflared $v is marked 'Do not use' by Cloudflare"; exit 1 ;;
+          esac
+          grep -q '^ARG CLOUDFLARED_SHA256_AMD64=[0-9a-f]\{64\}$' Dockerfile
+          grep -q '^ARG CLOUDFLARED_SHA256_ARM64=[0-9a-f]\{64\}$' Dockerfile
+      - name: no secrets in the repo
+        run: tests/no-secrets.sh
+
+  image-and-quadlet-e2e:
+    needs: [python, scripts]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y podman
+      - name: Prepare a rootless user session with linger
+        run: |
+          sudo loginctl enable-linger "$USER"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >>"$GITHUB_ENV"
+          git config --global --add safe.directory "$PWD"
+      - name: Install (first run creates the env file and stops for review)
+        run: |
+          for _ in $(seq 1 20); do systemctl --user show-environment >/dev/null 2>&1 && break; sleep 1; done
+          scripts/install.sh
+          scripts/install.sh
+      - name: Image contents
+        run: |
+          img=$(sed -n 's/^Image=//p' ~/.config/containers/systemd/woow-cf-tunnel.container)
+          echo "built $img"
+          podman run --rm --network=none --entrypoint cloudflared "$img" --version
+          # the healthcheck is present and runs (it fails here: no backend in this netns)
+          ! podman run --rm --network=none --entrypoint /usr/local/bin/cf-webui-healthcheck "$img"
+      - name: Smoke (unconfigured tunnel)
+        run: tests/smoke.sh
+      - name: Basic-auth proxy
+        run: |
+          printf 'ci-password-not-secret\n' | scripts/auth-passwd.sh admin
+          scripts/install.sh --with-auth
+          SMOKE_AUTH_USER=admin SMOKE_AUTH_PASS=ci-password-not-secret tests/smoke.sh
+          scripts/install.sh --without-auth
+      - name: Liveness chain (bogus token -> unhealthy -> HealthOnFailure=kill -> restart)
+        run: |
+          vol=$(sed -n 's/^VolumeName=//p' ~/.config/containers/systemd/woow-cf-tunnel-data.volume)
+          mp=$(podman volume inspect -f '{{.Mountpoint}}' "$vol")
+          printf '{"mode":"token"}' >"$mp/settings.json"
+          printf 'bogus-token-for-ci' >"$mp/.tunnel_token"
+          chmod 600 "$mp/.tunnel_token"
+          systemctl --user restart woow-cf-tunnel.service
+          # 60s start period + 3 x 30s of failing checks + RestartSec 10s: expect a restart within ~4 min
+          for _ in $(seq 1 60); do
+            n=$(systemctl --user show woow-cf-tunnel.service -p NRestarts --value)
+            if [ "$n" -ge 1 ]; then echo "restarted by the health kill (NRestarts=$n)"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::the container was not killed and restarted by HealthOnFailure=kill"
+          exit 1
+      - name: Uninstall leaves no unit behind
+        if: always()
+        run: |
+          scripts/uninstall.sh --purge --yes
+          test ! -e ~/.config/containers/systemd/woow-cf-tunnel.container
+      - name: Journal
+        if: always()
+        run: journalctl --user -u woow-cf-tunnel.service --no-pager -n 120 || true
