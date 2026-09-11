@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Mock loginctl for tests/harness: linger is on.
+echo yes

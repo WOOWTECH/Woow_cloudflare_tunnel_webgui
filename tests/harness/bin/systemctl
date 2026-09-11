@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Mock `systemctl --user` for tests/harness. State lives in $MOCK_STATE:
+#   legacy_active / legacy_enabled   the hand-written cf-tunnel-webgui unit (0/1)
+#   legacy_container                 exists while its container exists
+#   units/<unit>/active              Quadlet-generated units (woow-cf-tunnel*.service)
+#   loaded                           units the "generator" produced at the last daemon-reload
+#   running_image                    Image= of woow-cf-tunnel.container at its last (re)start
+#   new_nrestarts                    NRestarts of woow-cf-tunnel.service
+# MOCK_PERSIST=1: the legacy container survives a stop (openclaw's podman start -a unit).
+set -u
+S=${MOCK_STATE:?}
+echo "systemctl $*" >>"$S/calls.log"
+[[ ${1:-} == --user ]] && shift
+Q=$HOME/.config/containers/systemd
+P=$HOME/.config/systemd/user
+st() { cat "$S/$1" 2>/dev/null || echo "${2:-0}"; }
+kind() {
+  case $1 in
+    cf-tunnel-webgui.service | podman-cf-tunnel-webgui.service) echo legacy ;;
+    woow-cf-tunnel.service | woow-cf-tunnel-auth.service | woow-cf-tunnel-data-volume.service) echo quadlet ;;
+    woow-cf-tunnel-migrate-* | woow-cf-tunnel-upgrade-*) echo transient ;;
+    *) echo other ;;
+  esac
+}
+loaded() { grep -qx "$1" "$S/loaded" 2>/dev/null; }
+active() {
+  case $(kind "$1") in
+    legacy) [[ $(st legacy_active) == 1 ]] ;;
+    quadlet) [[ $(st "units/$1/active" 0) == 1 ]] ;;
+    *) return 1 ;;
+  esac
+}
+set_active() {
+  case $(kind "$1") in
+    legacy)
+      echo "$2" >"$S/legacy_active"
+      if [[ $2 == 1 ]]; then touch "$S/legacy_container"; elif [[ -z ${MOCK_PERSIST:-} ]]; then rm -f "$S/legacy_container"; fi ;;
+    quadlet)
+      mkdir -p "$S/units/$1"
+      echo "$2" >"$S/units/$1/active"
+      if [[ $1 == woow-cf-tunnel.service && $2 == 1 ]]; then
+        sed -n 's/^Image=//p' "$Q/woow-cf-tunnel.container" >"$S/running_image"
+        echo 0 >"$S/new_ready_calls"
+        mkdir -p "$S/units/woow-cf-tunnel-data-volume.service"
+        echo 1 >"$S/units/woow-cf-tunnel-data-volume.service/active"
+      fi ;;
+  esac
+}
+prop() {
+  local u=$1 p=$2
+  case $p in
+    LoadState)
+      case $(kind "$u") in
+        legacy) if [[ -e $P/$u ]]; then echo loaded; else echo not-found; fi ;;
+        quadlet) if loaded "$u"; then echo loaded; else echo not-found; fi ;;
+        *) echo not-found ;;
+      esac ;;
+    FragmentPath)
+      case $(kind "$u") in
+        legacy) echo "$P/$u" ;;
+        quadlet) loaded "$u" && echo "/run/user/1000/systemd/generator/$u" ;;
+      esac ;;
+    UnitFileState)
+      case $(kind "$u") in
+        legacy) if [[ $(st legacy_enabled) == 1 ]]; then echo enabled; else echo disabled; fi ;;
+        quadlet) loaded "$u" && echo generated ;;
+      esac ;;
+    ActiveState) if active "$u"; then echo active; else echo inactive; fi ;;
+    NRestarts) if [[ $u == woow-cf-tunnel.service ]]; then st new_nrestarts 0; else echo 0; fi ;;
+    *) echo "" ;;
+  esac
+}
+cmd=${1:-}
+shift || true
+case $cmd in
+  show-environment | reset-failed | cat) exit 0 ;;
+  daemon-reload)
+    : >"$S/loaded"
+    for f in "$Q"/woow-cf-tunnel.container "$Q"/woow-cf-tunnel-auth.container; do
+      [[ -f $f ]] && basename "$f" .container | sed 's/$/.service/' >>"$S/loaded"
+    done
+    [[ -f $Q/woow-cf-tunnel-data.volume ]] && echo woow-cf-tunnel-data-volume.service >>"$S/loaded"
+    exit 0 ;;
+  show)
+    p='' u=''
+    while (($#)); do
+      case $1 in -p) p=$2; shift ;; --value) ;; *) u=$1 ;; esac
+      shift
+    done
+    prop "$u" "$p"; exit 0 ;;
+  is-active)
+    q=0
+    [[ ${1:-} == --quiet ]] && { q=1; shift; }
+    if active "$1"; then ((q)) || echo active; exit 0; fi
+    ((q)) || echo inactive; exit 3 ;;
+  is-enabled)
+    s=$(prop "$1" UnitFileState); echo "${s:-disabled}"; [[ $s == enabled ]]; exit ;;
+  start | restart)
+    for u in "$@"; do
+      [[ $(prop "$u" LoadState) == loaded ]] || { echo "Unit $u not found." >&2; exit 5; }
+      [[ " ${MOCK_FAIL_START:-} " == *" $u "* ]] && { echo "Job for $u failed." >&2; exit 1; }
+      if [[ $cmd == start ]] && active "$u"; then continue; fi
+      set_active "$u" 1
+    done
+    exit 0 ;;
+  stop)
+    for u in "$@"; do set_active "$u" 0; done; exit 0 ;;
+  enable)
+    now=0
+    [[ ${1:-} == --now ]] && { now=1; shift; }
+    for u in "$@"; do
+      [[ $(kind "$u") == legacy ]] && echo 1 >"$S/legacy_enabled"
+      ((now)) && set_active "$u" 1
+    done
+    exit 0 ;;
+  disable)
+    for u in "$@"; do [[ $(kind "$u") == legacy ]] && echo 0 >"$S/legacy_enabled"; done; exit 0 ;;
+  *) exit 0 ;;
+esac

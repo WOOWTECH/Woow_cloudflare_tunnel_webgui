@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Mock curl for tests/harness: answers for cloudflared's metrics server (/ready, /config),
+# the GUI (/api/health), the auth proxy and three public hostnames, from $MOCK_STATE.
+# Knobs: MOCK_SCENARIO (never_ready | version_changed | public_mismatch | broken_config),
+#        MOCK_BAD_IMAGE (a running image that never gets edge connections),
+#        MOCK_WARMUP (/ready calls answered 503 after each start of the new unit; default 2),
+#        MOCK_EXTRA_ING (extra ingress JSON entries, each followed by a comma).
+set -u
+S=${MOCK_STATE:?}
+st() { cat "$S/$1" 2>/dev/null || echo "${2:-0}"; }
+url='' wfmt='' prev='' auth=0
+for a in "$@"; do
+  case $a in http*) url=$a ;; esac
+  [[ $prev == -w ]] && wfmt=$a
+  [[ $prev == -K || $prev == -u ]] && auth=1
+  prev=$a
+done
+L=$(st legacy_active)
+N=$(st units/woow-cf-tunnel.service/active 0)
+A=$(st units/woow-cf-tunnel-auth.service/active 0)
+sc=${MOCK_SCENARIO:-happy}
+bad_image=0
+[[ $N == 1 && -n ${MOCK_BAD_IMAGE:-} && $(st running_image '') == "$MOCK_BAD_IMAGE" ]] && bad_image=1
+body='' code=200
+case $url in
+  http://127.0.0.1:20241/ready)
+    if [[ $L == 1 ]]; then
+      body='{"status":200,"readyConnections":4}'
+    elif [[ $N == 1 ]]; then
+      c=$(($(st new_ready_calls) + 1))
+      echo "$c" >"$S/new_ready_calls"
+      if [[ $sc == never_ready || $bad_image == 1 || $c -le ${MOCK_WARMUP:-2} || -e $S/soaking ]]; then
+        body='{"status":503,"readyConnections":0}' code=503
+      else
+        body='{"status":200,"readyConnections":4}'
+      fi
+    else
+      exit 7
+    fi ;;
+  http://127.0.0.1:20241/config)
+    [[ $L == 1 || $N == 1 ]] || exit 7
+    v=28
+    [[ $N == 1 && $sc == version_changed ]] && v=29
+    body="{\"version\":$v,\"config\":{\"ingress\":[{\"hostname\":\"a.example.io\",\"service\":\"http://localhost:8123\"},{\"hostname\":\"ssh.example.io\",\"service\":\"ssh://localhost:22\"},{\"hostname\":\"dead.example.io\",\"service\":\"http://localhost:8787\"},${MOCK_EXTRA_ING:-}{\"service\":\"http_status:404\"}]}}"
+    [[ $sc == broken_config ]] && body='not json' ;;
+  http://127.0.0.1:8888/*)
+    [[ $A == 1 ]] || exit 7
+    case $url in
+      */healthz) code=204 ;;
+      *) if ((auth)); then code=200; else code=401; fi ;;
+    esac ;;
+  http://127.0.0.1:*/api/health)
+    port=${url#http://127.0.0.1:}
+    port=${port%%/*}
+    ok=0
+    [[ $port == "${LEGACY_GUI_PORT:-18000}" && $L == 1 ]] && ok=1
+    [[ $port == "${GUI_PORT:-18000}" && $N == 1 ]] && ok=1
+    ((ok)) || exit 7
+    body='{"status":"ok","process_running":true}' ;;
+  https://gui.example.io/)
+    if [[ $L == 1 ]]; then code=200; elif [[ $A == 1 ]]; then code=401; elif [[ $N == 1 ]]; then code=502; else code=530; fi ;;
+  https://a.example.io/)
+    if [[ $L == 1 || $N == 1 ]]; then code=200; else code=530; fi
+    [[ $N == 1 && $sc == public_mismatch ]] && code=502 ;;
+  https://ssh.example.io/) if [[ $L == 1 || $N == 1 ]]; then code=200; else code=530; fi ;;
+  https://dead.example.io/) if [[ $L == 1 || $N == 1 ]]; then code=502; else code=530; fi ;;
+  *) exit 6 ;;
+esac
+# -f: fail on HTTP >= 400 like the real curl
+for a in "$@"; do [[ $a == -f* || $a == -*f ]] && ((code >= 400)) && exit 22; done
+if [[ -n $wfmt ]]; then printf '%s' "$code"; else printf '%s' "$body"; fi

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Mock podman for tests/harness; never touches real containers. State in $MOCK_STATE
+# (see the systemctl mock) plus images/<ref with / : @ as _>.
+# MOCK_SCENARIO=unhealthy: the new container never reports healthy.
+# MOCK_BAD_IMAGE=<ref>: a container running that image never becomes healthy.
+# MOCK_LEGACY_VOL: the legacy container's /data volume (default cf_data).
+set -u
+S=${MOCK_STATE:?}
+echo "podman $*" >>"$S/calls.log"
+st() { cat "$S/$1" 2>/dev/null || echo "${2:-0}"; }
+ikey() { printf '%s' "${1//[\/:@]/_}"; }
+LEGACY_IMAGE=localhost/cf-webui:8214177d40f4
+new_up() { [[ $(st units/woow-cf-tunnel.service/active 0) == 1 ]]; }
+new_healthy() {
+  new_up && [[ ${MOCK_SCENARIO:-} != unhealthy ]] && [[ -z ${MOCK_BAD_IMAGE:-} || $(st running_image '') != "$MOCK_BAD_IMAGE" ]]
+}
+[[ ${1:-} == --version ]] && { echo "podman version 4.9.3"; exit 0; }
+cmd=${1:-}
+shift || true
+case $cmd in
+  build)
+    img=''
+    while (($#)); do [[ $1 == -t ]] && { img=$2; shift; }; shift; done
+    [[ ${MOCK_BUILD_FAIL:-0} == 1 ]] && { echo "mock: build failed" >&2; exit 1; }
+    mkdir -p "$S/images"; : >"$S/images/$(ikey "$img")"; exit 0 ;;
+  image)
+    case ${1:-} in
+      exists) [[ $2 == "$LEGACY_IMAGE" || -e $S/images/$(ikey "$2") ]]; exit ;;
+    esac
+    exit 0 ;;
+  pull) mkdir -p "$S/images"; : >"$S/images/$(ikey "${!#}")"; exit 0 ;;
+  unshare)
+    case ${1:-} in
+      chgrp) echo "chgrp $2 $3" >>"$S/chgrp.log"; exit 0 ;;
+      sh) [[ ${MOCK_NO_HEALTHCHECK:-0} == 1 ]] && exit 1; exit 0 ;;
+    esac
+    exit 0 ;;
+  container)
+    case ${1:-} in
+      exists)
+        case $2 in
+          cf-tunnel-webgui) [[ -e $S/legacy_container ]] ;;
+          woow-cf-tunnel) new_up ;;
+          *) false ;;
+        esac
+        exit ;;
+    esac
+    exit 0 ;;
+  inspect)
+    fmt=''
+    if [[ ${1:-} == -f || ${1:-} == --format ]]; then fmt=$2; shift 2; fi
+    name=${1:-}
+    case $name in
+      cf-tunnel-webgui)
+        [[ -e $S/legacy_container ]] || exit 125
+        case $fmt in
+          *Mounts*) echo "${MOCK_LEGACY_VOL:-cf_data}" ;;
+          *State.Running*) if [[ $(st legacy_active) == 1 ]]; then echo true; else echo false; fi ;;
+          *ImageName*) echo "$LEGACY_IMAGE" ;;
+          '') echo '[{"Name":"cf-tunnel-webgui"}]' ;;
+        esac ;;
+      woow-cf-tunnel)
+        new_up || exit 125
+        case $fmt in
+          *PODMAN_SYSTEMD_UNIT*) echo woow-cf-tunnel.service ;;
+          *State.Status*'|'*) if new_healthy; then echo "running|hc|healthy|2026-09-12T00:00:00Z"; else echo "running|hc|unhealthy|2026-09-12T00:00:00Z"; fi ;;
+          *State.Health.Status*) if new_healthy; then echo healthy; else echo unhealthy; fi ;;
+          *HealthcheckOnFailureAction*) echo kill ;;
+          *Config.Env*) printf 'UVICORN_HOST=127.0.0.1\nUVICORN_PORT=%s\nCF_METRICS_ADDR=127.0.0.1:20241\n' "${GUI_PORT:-18000}" ;;
+          '') echo '[{"Name":"woow-cf-tunnel"}]' ;;
+        esac ;;
+      woow-cf-tunnel-auth)
+        [[ $(st units/woow-cf-tunnel-auth.service/active 0) == 1 ]] || exit 125
+        case $fmt in *PODMAN_SYSTEMD_UNIT*) echo woow-cf-tunnel-auth.service ;; esac ;;
+      *)
+        case $fmt in *State.Status*) echo running ;; esac ;;  # the rescue container
+    esac
+    exit 0 ;;
+  volume)
+    case ${1:-} in
+      exists) [[ $2 == "${MOCK_LEGACY_VOL:-cf_data}" ]]; exit ;;
+      export)
+        printf 'settings.json\n.tunnel_token\n.csrf_secret\n' >"$S/vol.list"
+        tar -cf "$4" -C "$S" vol.list; exit ;;
+      import) echo "import $2 $3" >>"$S/import.log"; exit 0 ;;
+    esac
+    exit 0 ;;
+  ps)
+    if [[ " $* " == *volume=* ]] && new_up; then echo woow-cf-tunnel; fi
+    exit 0 ;;
+  save)
+    [[ $1 == -o ]] && echo image >"$2"; exit 0 ;;
+  healthcheck) new_healthy; exit ;;
+  *) exit 0 ;;
+esac

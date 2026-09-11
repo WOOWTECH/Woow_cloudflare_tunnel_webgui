@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Mock ss for tests/harness: a port is "listening" while the unit that owns it is active.
+S=${MOCK_STATE:?}
+st() { cat "$S/$1" 2>/dev/null || echo 0; }
+port=$(printf '%s' "$*" | sed -n 's/.*sport = :\([0-9]*\).*/\1/p')
+L=$(st legacy_active)
+N=$(st units/woow-cf-tunnel.service/active)
+A=$(st units/woow-cf-tunnel-auth.service/active)
+busy=0
+[[ $port == "${LEGACY_GUI_PORT:-18000}" && $L == 1 ]] && busy=1
+[[ $port == "${GUI_PORT:-18000}" && $N == 1 ]] && busy=1
+[[ $port == 20241 && ($L == 1 || $N == 1) ]] && busy=1
+[[ $port == 8888 && $A == 1 ]] && busy=1
+[[ -n ${MOCK_BUSY_PORTS:-} && " $MOCK_BUSY_PORTS " == *" $port "* ]] && busy=1
+((busy)) && echo "LISTEN 0 4096 127.0.0.1:$port 0.0.0.0:*"
+exit 0
