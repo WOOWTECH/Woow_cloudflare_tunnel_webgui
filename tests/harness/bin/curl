@@ -43,20 +43,22 @@ case $url in
     [[ $N == 1 && $sc == version_changed ]] && v=29
     body="{\"version\":$v,\"config\":{\"ingress\":[{\"hostname\":\"a.example.io\",\"service\":\"http://localhost:8123\"},{\"hostname\":\"ssh.example.io\",\"service\":\"ssh://localhost:22\"},{\"hostname\":\"dead.example.io\",\"service\":\"http://localhost:8787\"},${MOCK_EXTRA_ING:-}{\"service\":\"http_status:404\"}]}}"
     [[ $sc == broken_config ]] && body='not json' ;;
-  http://127.0.0.1:8888/*)
-    [[ $A == 1 ]] || exit 7
-    case $url in
-      */healthz) code=204 ;;
-      *) if ((auth)); then code=200; else code=401; fi ;;
-    esac ;;
-  http://127.0.0.1:*/api/health)
+  http://127.0.0.1:*)
     port=${url#http://127.0.0.1:}
+    path=/${port#*/}
     port=${port%%/*}
-    ok=0
-    [[ $port == "${LEGACY_GUI_PORT:-18000}" && $L == 1 ]] && ok=1
-    [[ $port == "${GUI_PORT:-18000}" && $N == 1 ]] && ok=1
-    ((ok)) || exit 7
-    body='{"status":"ok","process_running":true}' ;;
+    # the legacy GUI and the auth proxy can share a port (openclaw: 8888)
+    if [[ ($port == "${LEGACY_GUI_PORT:-18000}" && $L == 1) || ($port == "${GUI_PORT:-18000}" && $N == 1) ]]; then
+      [[ $path == /api/health ]] || exit 6
+      body='{"status":"ok","process_running":true}'
+    elif [[ $port == "${AUTH_PORT:-8888}" && $A == 1 ]]; then
+      case $path in
+        /healthz) code=204 ;;
+        *) if ((auth)); then code=200; else code=401; fi ;;
+      esac
+    else
+      exit 7
+    fi ;;
   https://gui.example.io/)
     if [[ $L == 1 ]]; then code=200; elif [[ $A == 1 ]]; then code=401; elif [[ $N == 1 ]]; then code=502; else code=530; fi ;;
   https://a.example.io/)
