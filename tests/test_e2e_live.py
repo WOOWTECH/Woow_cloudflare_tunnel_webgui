@@ -2,7 +2,7 @@
 E2E 即時測試(對真實運行中的容器)。
 
 使用方式:
-  CF_TEST_URL=http://localhost:8888 pytest -m e2e -v
+  CF_TEST_URL=http://127.0.0.1:18000 pytest -m e2e -v
 
 預設 deselect(僅在有運行容器時手動跑)。對齊新「本地管理 + 單一容器」設計,
 不依賴 podman、不使用舊 HA 欄位。
@@ -15,7 +15,7 @@ import httpx
 
 pytestmark = [pytest.mark.e2e]
 
-BASE_URL = os.getenv("CF_TEST_URL", "http://localhost:8888")
+BASE_URL = os.getenv("CF_TEST_URL", "http://127.0.0.1:18000")
 
 
 @pytest.fixture()

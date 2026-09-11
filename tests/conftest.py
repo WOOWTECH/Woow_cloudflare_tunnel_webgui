@@ -123,4 +123,4 @@ async def client(tmp_config_dir, mock_cli, mock_pm):
 # ---------------------------------------------------------------------------
 @pytest.fixture()
 def live_base_url():
-    return os.getenv("CF_TEST_URL", "http://localhost:8888")
+    return os.getenv("CF_TEST_URL", "http://127.0.0.1:18000")
