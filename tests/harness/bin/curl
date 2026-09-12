@@ -7,6 +7,9 @@
 # value rather than omitting it. That is load-bearing -- a mock that omitted the key let
 # cf_ingress_map's dict default hide a bug that refused a real migration on toypark1234
 # (see tests/cf-gate-ingress.sh).
+# /ready likewise carries connectorId beside status and readyConnections. Only the 200 body
+# was read off a live connector; the 503 warm-up body is this mock's own, and no caller
+# reads either field beyond readyConnections.
 # Knobs: MOCK_SCENARIO (never_ready | version_changed | public_mismatch | broken_config),
 #        MOCK_BAD_IMAGE (a running image that never gets edge connections),
 #        MOCK_WARMUP (/ready calls answered 503 after each start of the new unit; default 2),
@@ -36,14 +39,14 @@ if [[ ${MOCK_NO_METRICS:-0} == 1 && $url == http://127.0.0.1:20241/* ]]; then ex
 case $url in
   http://127.0.0.1:20241/ready)
     if [[ $L == 1 ]]; then
-      body='{"status":200,"readyConnections":4}'
+      body='{"status":200,"readyConnections":4,"connectorId":"00000000-0000-4000-8000-000000000000"}'
     elif [[ $N == 1 ]]; then
       c=$(($(st new_ready_calls) + 1))
       echo "$c" >"$S/new_ready_calls"
       if [[ $sc == never_ready || $bad_image == 1 || $c -le ${MOCK_WARMUP:-2} || -e $S/soaking ]]; then
         body='{"status":503,"readyConnections":0}' code=503
       else
-        body='{"status":200,"readyConnections":4}'
+        body='{"status":200,"readyConnections":4,"connectorId":"00000000-0000-4000-8000-000000000000"}'
       fi
     else
       exit 7

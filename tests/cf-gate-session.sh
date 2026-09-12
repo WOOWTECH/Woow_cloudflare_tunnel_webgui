@@ -33,12 +33,14 @@ mkdir -p "$TMP/bin" "$TMP/proc"
 for b in bash env cat; do ln -s "$(command -v "$b")" "$TMP/bin/$b"; done
 # podman stub: the cgroup of a containerised carrier carries only the container id, so the
 # guard resolves the id to a name. MOCK_CTR_NAME=<id>:<name> pairs, ';'-separated.
+# `podman inspect -f '{{.Name}}'` prints the bare name (verified on podman 4.9.3); the
+# leading-slash spelling this stub used is docker's, which podman never emits.
 cat >"$TMP/bin/podman" <<'STUB'
 #!/usr/bin/env bash
 id=${*: -1}
 IFS=';' read -r -a pairs <<<"${MOCK_CTR_NAME:-}"
 for p in "${pairs[@]}"; do
-  [[ ${p%%:*} == "$id" ]] && { printf '/%s\n' "${p#*:}"; exit 0; }
+  [[ ${p%%:*} == "$id" ]] && { printf '%s\n' "${p#*:}"; exit 0; }
 done
 exit 1
 STUB
