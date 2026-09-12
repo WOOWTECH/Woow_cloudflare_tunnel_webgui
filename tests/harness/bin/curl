@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Mock curl for tests/harness: answers for cloudflared's metrics server (/ready, /config),
 # the GUI (/api/health), the auth proxy and three public hostnames, from $MOCK_STATE.
+#
+# The /config body mirrors what a live connector sends (captured from cloudflared 2026.6.1):
+# every ingress rule carries the hostname key, and the catch-all carries it with an EMPTY
+# value rather than omitting it. That is load-bearing -- a mock that omitted the key let
+# cf_ingress_map's dict default hide a bug that refused a real migration on toypark1234
+# (see tests/cf-gate-ingress.sh).
 # Knobs: MOCK_SCENARIO (never_ready | version_changed | public_mismatch | broken_config),
 #        MOCK_BAD_IMAGE (a running image that never gets edge connections),
 #        MOCK_WARMUP (/ready calls answered 503 after each start of the new unit; default 2),
@@ -46,7 +52,7 @@ case $url in
     [[ $L == 1 || $N == 1 ]] || exit 7
     v=28
     [[ $N == 1 && $sc == version_changed ]] && v=29
-    body="{\"version\":$v,\"config\":{\"ingress\":[{\"hostname\":\"a.example.io\",\"service\":\"http://localhost:8123\"},{\"hostname\":\"ssh.example.io\",\"service\":\"ssh://localhost:22\"},{\"hostname\":\"dead.example.io\",\"service\":\"http://localhost:8787\"},${MOCK_EXTRA_ING:-}{\"service\":\"http_status:404\"}]}}"
+    body="{\"version\":$v,\"config\":{\"ingress\":[{\"hostname\":\"a.example.io\",\"service\":\"http://localhost:8123\"},{\"hostname\":\"ssh.example.io\",\"service\":\"ssh://localhost:22\"},{\"hostname\":\"dead.example.io\",\"service\":\"http://localhost:8787\"},${MOCK_EXTRA_ING:-}{\"hostname\":\"\",\"service\":\"http_status:404\"}]}}"
     [[ $sc == broken_config ]] && body='not json' ;;
   http://127.0.0.1:*)
     port=${url#http://127.0.0.1:}

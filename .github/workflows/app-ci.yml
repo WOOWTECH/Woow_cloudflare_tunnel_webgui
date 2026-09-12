@@ -36,6 +36,8 @@ jobs:
         run: shellcheck -x -P tests/harness tests/harness/*.sh tests/harness/bin/*
       - name: access-path guard (stubbed ss / proc / podman)
         run: tests/cf-gate-session.sh
+      - name: ingress map probe (stubbed cloudflared /config)
+        run: tests/cf-gate-ingress.sh
       - name: install / migrate / upgrade harness (mocked podman and systemd)
         run: tests/harness/run-all.sh
       - name: cloudflared version policy

@@ -78,7 +78,9 @@ cf_ingress_map() { # sorted "hostname origin" lines (no credentials in there)
   _cf_metrics config | python3 -c 'import json,sys
 try:
     for r in json.load(sys.stdin)["config"]["ingress"]:
-        print(r.get("hostname", "*"), r.get("service", ""))
+        # cloudflared sends the catch-all as {"hostname": "", ...}: the key is
+        # present and empty, so a dict default would never fire. An "or" catches both.
+        print(r.get("hostname") or "*", r.get("service", ""))
 except Exception:
     pass' | LC_ALL=C sort
 }
