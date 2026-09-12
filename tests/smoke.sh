@@ -23,7 +23,13 @@ PORT=${PORT:-18000}
 METRICS=$(cenv CF_METRICS_ADDR)
 METRICS=${METRICS:-127.0.0.1:20241}
 only_loopback() { # every TCP listener on port $1 is 127.0.0.1 / ::1
-  ! ss -ltnH "( sport = :$1 )" | awk '{print $4}' | grep -vqE '^(127\.0\.0\.1|\[::1\]):'
+  # NOT a pipeline into grep -vq: grep -q exits at the first non-loopback listener, the
+  # producer is then killed by SIGPIPE and pipefail makes the pipeline 141 -- which the
+  # leading ! turns back into "yes, loopback only", i.e. the exposure this check exists to
+  # catch would report a pass. Latent while ss fits the 64 KiB pipe buffer; wrong by design.
+  local _l
+  _l=$(ss -ltnH "( sport = :$1 )" 2>/dev/null | awk '{print $4}') || true
+  ! grep -vqE '^(127\.0\.0\.1|\[::1\]):' <<<"$_l"
 }
 ready_conns() {
   curl -s -m 3 "http://$METRICS/ready" 2>/dev/null |
