@@ -24,7 +24,7 @@
 #   QL_LOG_PREFIX       log prefix                   (basename of $0)
 
 # shellcheck disable=SC2034 # public: read by sync-lib.sh, repo scripts and CI
-QL_LIB_VERSION="1.1.0"
+QL_LIB_VERSION="1.2.0"
 
 # ---------------------------------------------------------------------------------------
 # logging
@@ -940,19 +940,26 @@ ql_check_unit_shadow() {
 ql_check_path_mounted() {
   local path=${1:?usage: ql_check_path_mounted <host_path> [allowed_container...]}
   shift
-  local real ids line name src q_hits=()
+  local real ids name src rows rc=0 q_hits=()
   real=$(realpath -m -- "$(ql_expand_home "$path")")
   ids=$(podman ps -q 2>/dev/null) || ql_die "podman ps failed"
   [[ -n $ids ]] || return 0
   local -a q_idarr=()
   read -ra q_idarr <<<"${ids//$'\n'/ }"
+  # podman wraps --format in an implicit {{range .}}, so inside the template "." is one
+  # container but "$" is the whole inspect array: {{$.Name}} cannot reach the container and
+  # makes podman print nothing at all. Capture the container in $c first. Errors are read
+  # too (a container may stop between `ps -q` and here) so a broken template cannot turn
+  # this guard into a silent pass.
+  rows=$(podman inspect --format '{{$c := .}}{{range .Mounts}}{{$c.Name}}|{{.Source}}{{println}}{{end}}' "${q_idarr[@]}" 2>&1) || rc=$?
+  ((rc == 0)) || ql_warn "podman inspect exited $rc while checking what bind-mounts $real (a container may have stopped); using what it returned"
   while IFS='|' read -r name src; do
     [[ -n $name && -n $src ]] || continue
     local a skip=0
     for a in "$@"; do [[ $a == "$name" ]] && skip=1; done
     ((skip)) && continue
     if [[ $src == "$real" || $real == "$src"/* || $src == "$real"/* ]]; then q_hits+=("$name ($src)"); fi
-  done < <(podman inspect --format '{{range .Mounts}}{{$.Name}}|{{.Source}}{{println}}{{end}}' "${q_idarr[@]}" 2>/dev/null)
+  done <<<"$rows"
   ((${#q_hits[@]} == 0)) || ql_die "$real is in use by running container(s): ${q_hits[*]}"
   return 0
 }
@@ -984,6 +991,35 @@ ql_pull_images() {
 # ---------------------------------------------------------------------------------------
 # install / apply / remove
 # ---------------------------------------------------------------------------------------
+# Paths a dry run said it would adopt (ql_adopt_file): ql_install_files treats them as gone,
+# the way the real run's move would have left them. Always empty outside a dry run.
+_QL_ADOPTED=()
+
+# ql_adopt_file <app> <path>
+#   Take over a file this package installed before it kept a manifest (an earlier install.sh
+#   that copied a helper unit straight into ~/.config/systemd/user). The file is moved into
+#   <state>/<app>/adopted/<timestamp>/, so ql_install_files writes our copy instead of
+#   refusing it as a foreign unit. The caller decides what is safe to adopt (same
+#   Documentation= URL, ...); this only moves it and keeps the old copy.
+#   Under QL_DRY_RUN=1 nothing is moved and the path is remembered instead, so a later
+#   ql_install_files in the same dry run reports the write the real run would do rather than
+#   dying on a collision the real run never reaches.
+ql_adopt_file() {
+  local app=${1:?usage: ql_adopt_file <app> <path>} p=${2:?usage: ql_adopt_file <app> <path>} dir
+  _ql_need_app "$app"
+  [[ -f $p && ! -L $p ]] || ql_die "ql_adopt_file: $p is not a regular file"
+  dir="$(_ql_state_dir "$app")/adopted"
+  if _ql_dry; then
+    _QL_ADOPTED+=("$p")
+    ql_info "[dry-run] would adopt $p (moved under $dir/)"
+    return 0
+  fi
+  dir=$dir/$(date +%Y%m%d-%H%M%S)
+  mkdir -p "$dir" || ql_die "cannot create $dir"
+  mv -- "$p" "$dir/${p##*/}" || ql_die "cannot move $p into $dir/"
+  ql_info "adopted $p (old copy: $dir/${p##*/})"
+}
+
 # ql_install_files <out_dir> <app> [--prune]
 #   Routes rendered files: Quadlet files -> QL_QUADLET_DIR, plain units -> QL_SYSTEMD_USER_DIR,
 #   <out_dir>/config/** -> QL_CONFIG_ROOT/<app>/**. Writes only files whose bytes differ
@@ -1022,15 +1058,16 @@ ql_install_files() {
   fi
   ((${#q_srcs[@]})) || ql_die "ql_install_files: nothing to install in $out"
 
-  local -A q_mf=() q_newmf=() q_inset=() q_pend=() q_changedq=()
+  local -A q_mf=() q_newmf=() q_inset=() q_pend=() q_changedq=() q_gone=()
   _ql_manifest_read "$app" q_mf
   local -a q_changed=() q_adopt=() q_modified=()
-  local i
+  local i a
+  for a in ${_QL_ADOPTED[@]+"${_QL_ADOPTED[@]}"}; do q_gone["$a"]=1; done
   for i in "${!q_srcs[@]}"; do
     f=${q_srcs[$i]} dst=${q_dsts[$i]}
     q_inset[$dst]=1
     if owner=$(_ql_owner_of "$dst" "$app"); then q_errs+=("$dst belongs to app '$owner'"); continue; fi
-    if [[ -e $dst || -L $dst ]]; then
+    if { [[ -e $dst || -L $dst ]]; } && [[ -z ${q_gone[$dst]+x} ]]; then
       if [[ ! -L $dst ]] && cmp -s -- "$f" "$dst"; then continue; fi
       if [[ -z ${q_mf[$dst]+x} ]]; then
         if [[ $dst == "$sdir"/* ]]; then
