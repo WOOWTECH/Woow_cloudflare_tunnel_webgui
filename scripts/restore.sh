@@ -57,7 +57,7 @@ fi
 ql_info "contents: $(tar -tf "$tar_path" | tr '\n' ' ')"
 
 if cf_session_rides_tunnel && ((!force)); then
-  ql_die "this SSH session arrives through the tunnel; the restart would drop it. Reconnect over another path, or pass --force"
+  ql_die "the restart would drop this session: $CF_SESSION_WHY. Reconnect over another path (the tailnet), or pass --force"
 fi
 if ((!yes)); then
   [[ -t 0 ]] || ql_die "not a terminal; pass --yes to confirm overwriting volume $vol"

@@ -38,7 +38,7 @@ ql_require_rootless
 ql_lock "$CF_APP"
 
 if cf_session_rides_tunnel && ((!force)) && [[ ${QL_DRY_RUN:-0} != 1 ]]; then
-  ql_die "this SSH session arrives through the tunnel you are about to remove. Reconnect over another path (the tailnet), or pass --force"
+  ql_die "removing the tunnel would cut this session: $CF_SESSION_WHY. Reconnect over another path (the tailnet), or pass --force"
 fi
 if systemctl --user is-active --quiet "$NEW_UNIT" 2>/dev/null && [[ ${QL_DRY_RUN:-0} != 1 ]]; then
   n=$(cf_ready_conns)

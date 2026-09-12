@@ -79,12 +79,13 @@ cmd_preflight() {
   none_installed() { [[ ! -e $QUADLET_DIR/woow-cf-tunnel.container && ! -e $QUADLET_DIR/woow-cf-tunnel-data.volume ]]; }
 
   echo "== access path"
-  echo "  ssh client address: ${SSH_CONNECTION%% *}"
+  echo "  ssh client address: ${SSH_CONNECTION:-<no SSH_CONNECTION>}"
   if cf_session_rides_tunnel; then
-    if ((allow_tunnel)); then echo "  WARN  this session rides the tunnel (override given)"
-    else bad "this SSH session arrives through cloudflared; reconnect over the tailnet (the swap drops it)"; fi
+    echo "  path: $CF_SESSION_PATH -- $CF_SESSION_WHY"
+    if ((allow_tunnel)); then echo "  WARN  this session is treated as riding the tunnel (override given)"
+    else bad "the swap drops this session: $CF_SESSION_WHY. Reconnect over the tailnet, or pass --allow-tunnel-session"; fi
   else
-    ok "this session does not ride the tunnel"
+    ok "this session does not ride the tunnel ($CF_SESSION_WHY)"
   fi
   if [[ $RESCUE_CONTAINER != none ]]; then
     check "rescue path: container $RESCUE_CONTAINER running" \
@@ -272,7 +273,7 @@ cmd_swap() {
   age=$(($(date +%s) - $(stat -c %Y "$run/run.env")))
   ((age < 1800)) || ql_die "the baseline is $((age / 60)) min old; run preflight again"
   [[ ! -e $run/PHASE ]] || ql_die "$run was already used (phase $(cat "$run/PHASE")); run preflight again"
-  if cf_session_rides_tunnel; then ql_warn "this session rides the tunnel and will drop during the swap; the watchdog carries on"; fi
+  if cf_session_rides_tunnel; then ql_warn "this session is treated as riding the tunnel and will drop during the swap ($CF_SESSION_WHY); the watchdog carries on"; fi
   unit=woow-cf-tunnel-migrate-${run##*/"$PREFIX"-}
   cf_detach "$run" "$unit" migrate-legacy.sh "woow-cf-tunnel legacy -> Quadlet swap watchdog" \
     || ql_die "systemd-run failed; nothing was changed"

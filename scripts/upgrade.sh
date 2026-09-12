@@ -132,7 +132,7 @@ cmd_swap() {
   run=$(run_arg "${1:-}")
   [[ -s $run/run.env ]] || ql_die "$run has no run.env; run $0 --prepare-only first"
   [[ ! -e $run/PHASE ]] || ql_die "$run was already used (phase $(cat "$run/PHASE"))"
-  if cf_session_rides_tunnel; then ql_warn "this session rides the tunnel and may drop during the restart; the watchdog carries on"; fi
+  if cf_session_rides_tunnel; then ql_warn "this session is treated as riding the tunnel and may drop during the restart ($CF_SESSION_WHY); the watchdog carries on"; fi
   unit=woow-cf-tunnel-upgrade-${run##*/"$PREFIX"-}
   cf_detach "$run" "$unit" upgrade.sh "woow-cf-tunnel upgrade watchdog" \
     || ql_die "systemd-run failed; nothing was changed"

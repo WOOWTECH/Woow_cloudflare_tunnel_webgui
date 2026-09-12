@@ -96,11 +96,155 @@ cf_nrestarts() {
 }
 cf_port_busy() { [[ -n $(ss -ltnH "( sport = :$1 )" 2>/dev/null) ]]; }
 cf_health() { podman inspect -f '{{.State.Health.Status}}' "$NEW_CONTAINER" 2>/dev/null; }
-# cf_session_rides_tunnel: this SSH session arrives through cloudflared (loopback source)
+# ---- which remote-access path is this session on? --------------------------------------------
+# The client address in SSH_CONNECTION does NOT tell the two paths apart. tailscaled runs with
+# --tun=userspace-networking on these hosts, so it terminates the tailnet connection itself and
+# re-dials 127.0.0.1:22: a tailnet session is as loopback as a cloudflared one. What differs is
+# which local process holds the *client* end of that loopback pair (measured on toypark1234):
+#   tailnet      ESTAB 127.0.0.1:52500 127.0.0.1:22 users:(("tailscaled",pid=3602652,fd=16))
+#   cloudflared  ESTAB 127.0.0.1:52512 127.0.0.1:22 users:(("cloudflared",pid=3909,fd=12))
+# so the carrier process names the path, and `ss -tnpH "sport = :<client_port>"` finds it.
+: "${CF_PROC:=/proc}"
+# A carrier is the tunnel when its process name, argv[0], cgroup (Quadlet unit) or podman
+# container name matches this: cloudflared itself, the Quadlet unit/container woow-cf-tunnel,
+# or the legacy cf-tunnel-webgui container it runs in here.
+: "${CF_CARRIER_TUNNEL_RE:=cloudflared|cf-tunnel|woow-cf-tunnel}"
+# Carriers that only front another process (rootless podman port shims): never conclusive.
+: "${CF_CARRIER_OPAQUE_RE:=^(pasta|passt|slirp4netns|rootlessport|conmon|podman)$}"
+# shellcheck disable=SC2034 # CF_SESSION_PATH/WHY are read by the scripts that source this file
+CF_SESSION_PATH='' # tunnel | other | unknown | none, set by cf_session_rides_tunnel
+CF_SESSION_WHY=''  # one line saying what was seen, so a refusal is never a guess to the operator
+
+_cf_is_loopback() { [[ $1 == 127.* || $1 == ::1 || $1 == 0:0:0:0:0:0:0:1 || $1 == ::ffff:127.* ]]; }
+# _cf_argv0 <pid>: argv[0] only. The rest of the command line is never read, let alone
+# printed: cloudflared's carries the tunnel token.
+_cf_argv0() {
+  local a=''
+  IFS= read -r -d '' a <"$CF_PROC/$1/cmdline" 2>/dev/null
+  printf '%s' "$a"
+}
+# _cf_sshd_ancestor: is this shell a descendant of sshd? (OpenSSH >= 9.8 splits the session
+# into sshd-session, hence the prefix match.) Used only when SSH_CONNECTION is missing.
+_cf_sshd_ancestor() {
+  local pid=${CF_SESSION_PID:-$$} n=0 comm st ppid
+  while ((n++ < 20)); do
+    comm=$(cat "$CF_PROC/$pid/comm" 2>/dev/null) || return 1
+    [[ $comm == sshd* ]] && return 0
+    st=$(cat "$CF_PROC/$pid/stat" 2>/dev/null) || return 1
+    read -r _ ppid _ <<<"${st##*') '}" # pid (comm) state ppid ...; comm may hold spaces
+    [[ ${ppid:-} =~ ^[0-9]+$ ]] && ((ppid > 1)) || return 1
+    pid=$ppid
+  done
+  return 1
+}
+# _cf_carriers <sport> <dport>: "<comm> <pid>" per local process holding the client end of
+# the loopback pair. No output = undeterminable (no ss, no socket, or no permission to see
+# whose it is -- ss omits users:(()) for another user's process).
+_cf_carriers() {
+  local sport=$1 dport=${2:-} out='' line la pa rest lport laddr pport
+  command -v ss >/dev/null 2>&1 || return 0
+  out=$(ss -tnpH "sport = :$sport" 2>/dev/null) || out=''
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    read -r _ _ _ la pa rest <<<"$line" # State Recv-Q Send-Q Local Peer Process
+    lport=${la##*:} laddr=${la%:*} pport=${pa##*:}
+    laddr=${laddr#\[} laddr=${laddr%\]}
+    [[ $lport == "$sport" ]] || continue
+    [[ -z $dport || $pport == "$dport" ]] || continue
+    _cf_is_loopback "$laddr" || continue
+    while [[ $rest =~ \(\"([^\"]+)\",pid=([0-9]+) ]]; do
+      printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+      rest=${rest#*"${BASH_REMATCH[0]}"}
+    done
+  done <<<"$out"
+}
+# _cf_carrier_kind <comm> <pid>: tunnel | opaque | other
+_cf_carrier_kind() {
+  local comm=$1 pid=$2 argv0 cg name
+  if [[ $comm =~ $CF_CARRIER_TUNNEL_RE ]]; then printf tunnel; return 0; fi
+  # comm is truncated at 15 characters and says nothing about the container the carrier runs
+  # in, so widen the evidence: argv[0], the cgroup path (a Quadlet carrier shows up there as
+  # <unit>.service) and, for a podman container, the container's name (the cgroup only
+  # carries its id).
+  argv0=$(_cf_argv0 "$pid")
+  cg=$(cat "$CF_PROC/$pid/cgroup" 2>/dev/null) || cg=''
+  if [[ ${argv0##*/} =~ $CF_CARRIER_TUNNEL_RE || $cg =~ $CF_CARRIER_TUNNEL_RE ]]; then printf tunnel; return 0; fi
+  if [[ $cg =~ libpod(-payload)?-([0-9a-f]{12,}) ]]; then
+    name=$(podman inspect -f '{{.Name}}' "${BASH_REMATCH[2]}" 2>/dev/null) || name=''
+    if [[ -n $name && $name =~ $CF_CARRIER_TUNNEL_RE ]]; then printf tunnel; return 0; fi
+  fi
+  if [[ $comm =~ $CF_CARRIER_OPAQUE_RE ]]; then printf opaque; return 0; fi
+  printf other
+}
+# cf_session_rides_tunnel: would cutting the tunnel cut this shell's own SSH session?
+# Sets CF_SESSION_PATH and CF_SESSION_WHY (the callers put WHY in their message).
+#
+# This is a safety guard, so it is deliberately asymmetric: a wrong "no" lets an operator cut
+# the branch they are sitting on, while a wrong "yes" only costs them --allow-tunnel-session
+# or --force. Every case where the carrier cannot be determined -- no ss(8), no permission to
+# see the carrier's process, a container shim that could be fronting cloudflared, two
+# different carriers on one socket, or an SSH_CONNECTION stripped by sudo/su/tmux under an
+# sshd parent -- therefore answers "yes, assume it rides the tunnel".
+# The one negative answer given without evidence of a carrier is "not an ssh session at all"
+# (no SSH_CONNECTION and no sshd ancestor: a console, CI, or a detached multiplexer, none of
+# which a tunnel restart can disconnect).
 cf_session_rides_tunnel() {
-  local src=${SSH_CONNECTION:-}
-  src=${src%% *}
-  [[ $src == 127.0.0.1 || $src == ::1 ]]
+  local conn=${SSH_CONNECTION:-} src sport dport carriers='' comm pid k desc=''
+  local -a kinds=() comms=()
+  CF_SESSION_PATH='' CF_SESSION_WHY=''
+  if [[ -z $conn ]]; then
+    if _cf_sshd_ancestor; then
+      CF_SESSION_PATH=unknown
+      CF_SESSION_WHY="SSH_CONNECTION is unset but this shell descends from sshd (sudo, su or a multiplexer strips it), so the access path cannot be read"
+      return 0
+    fi
+    CF_SESSION_PATH=none
+    CF_SESSION_WHY="no SSH_CONNECTION and no sshd parent process: this is not an ssh session that a tunnel restart could drop"
+    return 1
+  fi
+  read -r src sport _ dport <<<"$conn" # <client_ip> <client_port> <server_ip> <server_port>
+  if ! _cf_is_loopback "${src:-}"; then
+    CF_SESSION_PATH=other
+    CF_SESSION_WHY="the ssh client address ${src:-?} is not loopback, so no local forwarder carries this session"
+    return 1
+  fi
+  if [[ ! ${sport:-} =~ ^[0-9]+$ ]]; then
+    CF_SESSION_PATH=unknown
+    CF_SESSION_WHY="the client address $src is loopback and SSH_CONNECTION ('$conn') has no client port to look the carrier up by"
+    return 0
+  fi
+  if ! command -v ss >/dev/null 2>&1; then
+    CF_SESSION_PATH=unknown
+    CF_SESSION_WHY="the client address $src is loopback (both the tunnel and the tailnet look like this) and ss(8) is missing, so the carrier cannot be identified"
+    return 0
+  fi
+  carriers=$(_cf_carriers "$sport" "${dport:-}")
+  if [[ -z $carriers ]]; then
+    CF_SESSION_PATH=unknown
+    CF_SESSION_WHY="the client address $src is loopback but ss shows no process holding $src:$sport (it belongs to another user, or the socket is gone)"
+    return 0
+  fi
+  while read -r comm pid; do
+    [[ -n ${comm:-} ]] || continue
+    k=$(_cf_carrier_kind "$comm" "$pid")
+    desc+="${desc:+, }$comm (pid $pid)"
+    [[ " ${kinds[*]} " == *" $k "* ]] || kinds+=("$k")
+    [[ " ${comms[*]} " == *" $comm "* ]] || comms+=("$comm")
+  done <<<"$carriers"
+  if [[ " ${kinds[*]} " == *" tunnel "* ]]; then
+    CF_SESSION_PATH=tunnel
+    CF_SESSION_WHY="the local end of this session ($src:$sport) is held by $desc: it arrives through the cloudflared tunnel"
+    return 0
+  fi
+  # a shim that could be fronting cloudflared, or two different carriers on one socket
+  if [[ " ${kinds[*]} " == *" opaque "* ]] || ((${#comms[@]} > 1)); then
+    CF_SESSION_PATH=unknown
+    CF_SESSION_WHY="the local end of this session ($src:$sport) is held by $desc, which cannot be told apart from cloudflared fronting it"
+    return 0
+  fi
+  CF_SESSION_PATH=other
+  CF_SESSION_WHY="the local end of this session ($src:$sport) is held by $desc, not cloudflared: this session does not ride the tunnel"
+  return 1
 }
 
 # ---- baseline -------------------------------------------------------------------------------
