@@ -21,10 +21,12 @@
 #   QL_DRY_RUN=1        install/apply/remove/uninstall/secret/pull report instead of acting
 #   QL_POLL_INTERVAL    seconds between wait polls   (2)
 #   QL_ENV_MODE_CHECK=0 ql_env_load skips the 0600/owner warning (repo example files in CI)
+#   QL_PATH_MOUNT_ALLOW containers (space/comma separated) allowed to hold a mount that
+#                       CONTAINS a guarded path, e.g. pi-web's %h:/host%h (ql_check_path_mounted)
 #   QL_LOG_PREFIX       log prefix                   (basename of $0)
 
 # shellcheck disable=SC2034 # public: read by sync-lib.sh, repo scripts and CI
-QL_LIB_VERSION="1.2.0"
+QL_LIB_VERSION="1.3.0"
 
 # ---------------------------------------------------------------------------------------
 # logging
@@ -935,12 +937,35 @@ ql_check_unit_shadow() {
   return 0
 }
 
-# ql_check_path_mounted <host_path> [allowed_container...]: die if a running container
-# (other than the allowed ones) bind-mounts the path, a parent, or a child of it.
+# ql_check_path_mounted [--allow-broader NAME]... <host_path> [allowed_container...]
+#   What another running container does with <host_path> is not one relationship but three:
+#     it mounts the SAME path                       two writers on our data   -> ql_die
+#     it mounts a path INSIDE <host_path>           two writers on our data   -> ql_die
+#     <host_path> is INSIDE a broader mount it holds   usually by design      -> ql_warn
+#   The third case is normal and must not block an install: a host-file-access container
+#   (pi-web's `Volume=%h:/host%h:rw`, which gives the coding agent the home directory)
+#   holds a mount that contains EVERY path under $HOME. The warning names the container
+#   and the broader mount so an operator can see what holds it.
+#   [allowed_container...] are this app's own containers; they are ignored completely.
+#   --allow-broader NAME (repeatable) and QL_PATH_MOUNT_ALLOW (names separated by spaces
+#   or commas, e.g. QL_PATH_MOUNT_ALLOW=pi-web) declare a known file-access container and
+#   silence the warning for it. They cover the third case only: that same container
+#   mounting <host_path> itself, or a path inside it, still dies.
+#   A failed `podman inspect` warns; it never turns the guard into a silent pass.
 ql_check_path_mounted() {
-  local path=${1:?usage: ql_check_path_mounted <host_path> [allowed_container...]}
+  local q_allow=${QL_PATH_MOUNT_ALLOW:-}
+  q_allow=${q_allow//,/ }
+  while [[ ${1:-} == --* ]]; do
+    case $1 in
+      --allow-broader) q_allow+=" ${2:?--allow-broader needs a container name}"; shift ;;
+      *) ql_die "ql_check_path_mounted: unknown option $1" ;;
+    esac
+    shift
+  done
+  local path=${1:?usage: ql_check_path_mounted [--allow-broader NAME]... <host_path> [allowed_container...]}
   shift
-  local real ids name src rows rc=0 q_hits=()
+  local real ids name src rows rc=0 a skip
+  local -a q_hits=() q_broader=()
   real=$(realpath -m -- "$(ql_expand_home "$path")")
   ids=$(podman ps -q 2>/dev/null) || ql_die "podman ps failed"
   [[ -n $ids ]] || return 0
@@ -952,18 +977,24 @@ ql_check_path_mounted() {
   # too (a container may stop between `ps -q` and here) so a broken template cannot turn
   # this guard into a silent pass.
   rows=$(podman inspect --format '{{$c := .}}{{range .Mounts}}{{$c.Name}}|{{.Source}}{{println}}{{end}}' "${q_idarr[@]}" 2>&1) || rc=$?
-  ((rc == 0)) || ql_warn "podman inspect exited $rc while checking what bind-mounts $real (a container may have stopped); using what it returned"
+  ((rc == 0)) || ql_warn "podman inspect exited $rc while checking what bind-mounts $real (a container may have stopped); this guard judged only the rows it did return"
   while IFS='|' read -r name src; do
     [[ -n $name && -n $src ]] || continue
-    local a skip=0
+    skip=0
     for a in "$@"; do [[ $a == "$name" ]] && skip=1; done
     ((skip)) && continue
-    if [[ $src == "$real" || $real == "$src"/* || $src == "$real"/* ]]; then q_hits+=("$name ($src)"); fi
+    if [[ $src == "$real" || $src == "$real"/* ]]; then
+      # the same path, or one inside it: that container writes our data
+      q_hits+=("$name ($src)")
+    elif [[ $real == "$src"/* ]]; then
+      # our path merely sits inside a broader mount that container holds
+      _ql_in_words "$name" "$q_allow" || q_broader+=("$name ($src)")
+    fi
   done <<<"$rows"
   ((${#q_hits[@]} == 0)) || ql_die "$real is in use by running container(s): ${q_hits[*]}"
+  ((${#q_broader[@]} == 0)) || ql_warn "$real sits inside a broader mount held by running container(s): ${q_broader[*]}; that is normal for a host-file-access container. Declare it (QL_PATH_MOUNT_ALLOW=<name>, or --allow-broader <name>) to silence this."
   return 0
 }
-
 # ---------------------------------------------------------------------------------------
 # images
 # ---------------------------------------------------------------------------------------
