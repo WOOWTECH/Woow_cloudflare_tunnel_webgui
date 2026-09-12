@@ -190,6 +190,21 @@ case_uninstall_purge_backs_up_then_removes_the_volume() {
   return "$A_FAILS"
 }
 
+case_uninstall_purge_with_no_metrics_endpoint() {
+  # The unit is active but cloudflared is not running (unconfigured, bogus token, crashed),
+  # so the edge-connection probe gets a refused connection. uninstall.sh must still remove
+  # everything instead of dying on curl's exit status.
+  sandbox uninstall-no-metrics
+  env_file
+  t "$R/scripts/install.sh"
+  export MOCK_NO_METRICS=1
+  : >"$MOCK_STATE/calls.log"
+  t "$R/scripts/uninstall.sh" --purge --yes
+  tnot test -e "$(QDIR)/woow-cf-tunnel.container"
+  t test "$(calls 'podman volume rm cf_data')" = 1
+  return "$A_FAILS"
+}
+
 case_uninstall_refuses_over_a_tunnel_ssh_session() {
   sandbox uninstall-session
   env_file
@@ -217,5 +232,6 @@ INSTALL_CASES=(
   case_install_dry_run_changes_nothing
   case_uninstall_keeps_the_data_volume
   case_uninstall_purge_backs_up_then_removes_the_volume
+  case_uninstall_purge_with_no_metrics_endpoint
   case_uninstall_refuses_over_a_tunnel_ssh_session
 )

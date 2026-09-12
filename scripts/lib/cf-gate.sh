@@ -58,18 +58,24 @@ cf_result() {
 }
 
 # ---- probes (stdout = value) ------------------------------------------------------------------
+# _cf_metrics <path>: GET cloudflared's metrics server. Empty output -- never a failure --
+# when nothing answers there, which is the normal state of an unconfigured, stopped or
+# crashed tunnel. The `|| true` is load-bearing: the callers run under `set -euo pipefail`,
+# where curl's transport status (7 = connection refused) wins the pipeline and would kill
+# them silently instead of letting each probe below return the sentinel it documents.
+_cf_metrics() { curl -s -m 4 "http://$METRICS_ADDR/$1" 2>/dev/null || true; }
 cf_ready_conns() { # readyConnections from cloudflared /ready; 0 when unreachable
-  curl -s -m 4 "http://$METRICS_ADDR/ready" 2>/dev/null | python3 -c 'import json,sys
+  _cf_metrics ready | python3 -c 'import json,sys
 try: print(int(json.load(sys.stdin).get("readyConnections") or 0))
 except Exception: print(0)'
 }
 cf_config_version() { # remote-managed ingress config version; -1 when unknown
-  curl -s -m 4 "http://$METRICS_ADDR/config" 2>/dev/null | python3 -c 'import json,sys
+  _cf_metrics config | python3 -c 'import json,sys
 try: print(int(json.load(sys.stdin)["version"]))
 except Exception: print(-1)'
 }
 cf_ingress_map() { # sorted "hostname origin" lines (no credentials in there)
-  curl -s -m 4 "http://$METRICS_ADDR/config" 2>/dev/null | python3 -c 'import json,sys
+  _cf_metrics config | python3 -c 'import json,sys
 try:
     for r in json.load(sys.stdin)["config"]["ingress"]:
         print(r.get("hostname", "*"), r.get("service", ""))

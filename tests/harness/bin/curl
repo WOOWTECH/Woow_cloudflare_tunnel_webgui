@@ -4,7 +4,9 @@
 # Knobs: MOCK_SCENARIO (never_ready | version_changed | public_mismatch | broken_config),
 #        MOCK_BAD_IMAGE (a running image that never gets edge connections),
 #        MOCK_WARMUP (/ready calls answered 503 after each start of the new unit; default 2),
-#        MOCK_EXTRA_ING (extra ingress JSON entries, each followed by a comma).
+#        MOCK_EXTRA_ING (extra ingress JSON entries, each followed by a comma),
+#        MOCK_NO_METRICS (nothing listens on the metrics port: an unconfigured or crashed
+#                         tunnel, so every /ready and /config call is refused).
 set -u
 S=${MOCK_STATE:?}
 st() { cat "$S/$1" 2>/dev/null || echo "${2:-0}"; }
@@ -22,6 +24,9 @@ sc=${MOCK_SCENARIO:-happy}
 bad_image=0
 [[ $N == 1 && -n ${MOCK_BAD_IMAGE:-} && $(st running_image '') == "$MOCK_BAD_IMAGE" ]] && bad_image=1
 body='' code=200
+# the container shares the host netns, so the metrics port is only open while cloudflared
+# itself runs: with no token (or a bogus one) the connection is refused, unit active or not
+if [[ ${MOCK_NO_METRICS:-0} == 1 && $url == http://127.0.0.1:20241/* ]]; then exit 7; fi
 case $url in
   http://127.0.0.1:20241/ready)
     if [[ $L == 1 ]]; then
