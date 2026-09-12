@@ -121,6 +121,13 @@ tests/smoke.sh                           # 完整的安裝後檢查
 > **如果 SSH 是走這條隧道進來的，重啟會把你自己斷線。** `scripts/install.sh` 永遠不會重啟
 > 執行中的隧道；`scripts/upgrade.sh` 則由背景監看程式執行重啟，失敗會自動回滾。
 > 遠端操作前，一定要先確保有第二條路（tailnet、區域網路或實體主控台）。
+>
+> `migrate-legacy.sh`、`upgrade.sh`、`uninstall.sh`、`restore.sh` 會用
+> `ss -tnpH "sport = :<用戶端埠>"` 查出「是哪個本機行程握著這條 SSH 連線的用戶端那一端」來
+> 判斷你走的是哪條路：tailscaled 以 `--tun=userspace-networking` 執行時同樣會改連
+> 127.0.0.1:22，所以光看來源位址是 loopback 什麼都證明不了，只有載送行程
+> （`cloudflared` 或 `tailscaled`）能分辨。查不出載送行程時，一律當作你走在隧道上並說明
+> 依據；要覆寫請用 `--allow-tunnel-session`（migrate）或 `--force`（uninstall、restore）。
 
 已知行為：當你的 ISP 或邊緣節點連不上時，健康檢查會大約每兩分鐘殺掉並重啟容器一次，
 直到連線恢復。從介面按下停止隧道也會被同樣機制還原——在「隧道就是遠端路徑」的主機上，

@@ -127,6 +127,14 @@ tests/smoke.sh                           # the full post-install check list
 > never restarts a running tunnel; `scripts/upgrade.sh` does the restart from a detached
 > watchdog that rolls back on its own. Always keep a second way in (a tailnet, the LAN, a
 > console) before touching it remotely.
+>
+> `migrate-legacy.sh`, `upgrade.sh`, `uninstall.sh` and `restore.sh` work out which path you
+> are on by asking who holds the local end of your SSH connection
+> (`ss -tnpH "sport = :<client port>"`): with `--tun=userspace-networking` tailscaled also
+> re-dials 127.0.0.1:22, so a loopback client address proves nothing on its own — only the
+> carrier process (`cloudflared` vs `tailscaled`) does. When the carrier cannot be identified
+> they assume you are on the tunnel and say what they saw; `--allow-tunnel-session`
+> (migrate) and `--force` (uninstall, restore) override.
 
 Known behaviour: while your ISP or the edge is unreachable, the healthcheck keeps killing
 and restarting the container about every two minutes until connectivity returns. Stopping
