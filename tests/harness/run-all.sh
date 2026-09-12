@@ -70,7 +70,9 @@ expect migrate happy postcommit_rollback 'ROLLED_BACK \(manual rollback'
 # refusals that change nothing
 expect migrate legacy_unhealthy direct 'ABORTED_BEFORE_CHANGE'
 expect migrate broken_config direct 'preflight refused' 'cannot read the ingress config version'
-expect migrate tunnel_session direct 'arrives through cloudflared'
+# the access-path guard, both loopback: only the carrier process tells the paths apart
+expect migrate tunnel_session direct 'preflight refused' 'arrives through the cloudflared tunnel'
+expect migrate tailnet_session direct 'phase=committed'
 
 # upgrade of an installed woow-cf-tunnel
 expect upgrade happy direct 'phase=committed' 'images: running=new installed=new'

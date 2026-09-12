@@ -205,16 +205,34 @@ case_uninstall_purge_with_no_metrics_endpoint() {
   return "$A_FAILS"
 }
 
+# Both remote-access paths reach sshd from 127.0.0.1 (tailscaled runs with
+# --tun=userspace-networking, so it re-dials loopback exactly as cloudflared does). The
+# address therefore decides nothing; the process holding the client end of that pair does.
 case_uninstall_refuses_over_a_tunnel_ssh_session() {
   sandbox uninstall-session
   env_file
   t "$R/scripts/install.sh"
-  export SSH_CONNECTION="::1 50000 ::1 22"
+  export SSH_CONNECTION="127.0.0.1 50642 127.0.0.1 22" MOCK_SSH_CARRIER=cloudflared
   local out
   out=$("$R/scripts/uninstall.sh" 2>&1) && { echo "  uninstall ran over a tunnel session"; A_FAILS=$((A_FAILS + 1)); }
   t grep -q 'reconnect over another path\|Reconnect over another path' <<<"$out"
+  t grep -q 'held by cloudflared (pid' <<<"$out" # it says what it saw, not just "loopback"
   t test -e "$(QDIR)/woow-cf-tunnel.container"
   t test "$(cat "$MOCK_STATE/units/woow-cf-tunnel.service/active")" = 1
+  return "$A_FAILS"
+}
+
+case_uninstall_runs_over_a_loopback_tailnet_session() {
+  sandbox uninstall-tailnet
+  env_file
+  t "$R/scripts/install.sh"
+  # The rescue path: same loopback address as the tunnel, carried by tailscaled. Refusing it
+  # would leave --force as the only way out, exactly when the guard matters most.
+  export SSH_CONNECTION="127.0.0.1 55996 127.0.0.1 22" MOCK_SSH_CARRIER=tailscaled
+  : >"$MOCK_STATE/calls.log"
+  t "$R/scripts/uninstall.sh"
+  tnot test -e "$(QDIR)/woow-cf-tunnel.container"
+  t test "$(cat "$MOCK_STATE/units/woow-cf-tunnel.service/active")" = 0
   return "$A_FAILS"
 }
 
@@ -234,4 +252,5 @@ INSTALL_CASES=(
   case_uninstall_purge_backs_up_then_removes_the_volume
   case_uninstall_purge_with_no_metrics_endpoint
   case_uninstall_refuses_over_a_tunnel_ssh_session
+  case_uninstall_runs_over_a_loopback_tailnet_session
 )

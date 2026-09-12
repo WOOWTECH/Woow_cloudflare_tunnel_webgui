@@ -34,6 +34,8 @@ jobs:
           podman --version
       - name: shellcheck the test harness
         run: shellcheck -x -P tests/harness tests/harness/*.sh tests/harness/bin/*
+      - name: access-path guard (stubbed ss / proc / podman)
+        run: tests/cf-gate-session.sh
       - name: install / migrate / upgrade harness (mocked podman and systemd)
         run: tests/harness/run-all.sh
       - name: cloudflared version policy

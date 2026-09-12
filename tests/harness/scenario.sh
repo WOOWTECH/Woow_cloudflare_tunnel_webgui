@@ -9,7 +9,8 @@
 #                                                  soak_restart soak_lost postcommit_rollback
 #   scenario.sh upgrade <scenario> <mode>   modes: direct swap
 # Scenarios pick the mock behaviour: happy, never_ready, version_changed, public_mismatch,
-# unhealthy, broken_config, legacy_unhealthy, tunnel_session, openclaw, bad_image, noop.
+# unhealthy, broken_config, legacy_unhealthy, tunnel_session, tailnet_session, openclaw,
+# bad_image, noop.
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=common.sh
@@ -76,7 +77,10 @@ if [[ $kind == migrate ]]; then
     echo 'correct-horse-battery' | bash "$R/scripts/auth-passwd.sh" admin >/dev/null
     pf_args+=(--with-auth)
   fi
-  [[ $sc == tunnel_session ]] && export SSH_CONNECTION="::1 50000 ::1 22"
+  # Both of these arrive from 127.0.0.1 (tailscaled runs --tun=userspace-networking, so it
+  # re-dials sshd over loopback just like cloudflared does): only the carrier tells them apart.
+  [[ $sc == tunnel_session ]] && export SSH_CONNECTION="127.0.0.1 50642 127.0.0.1 22" MOCK_SSH_CARRIER=cloudflared
+  [[ $sc == tailnet_session ]] && export SSH_CONNECTION="127.0.0.1 55996 127.0.0.1 22" MOCK_SSH_CARRIER=tailscaled
   pf=$(bash "$R/scripts/migrate-legacy.sh" preflight "${pf_args[@]}" 2>&1)
   RUN=$(sed -n 's/^preflight OK. RUN=//p' <<<"$pf")
   if [[ -z $RUN ]]; then
