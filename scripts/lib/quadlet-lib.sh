@@ -24,7 +24,7 @@
 #   QL_LOG_PREFIX       log prefix                   (basename of $0)
 
 # shellcheck disable=SC2034 # public: read by sync-lib.sh, repo scripts and CI
-QL_LIB_VERSION="1.0.0"
+QL_LIB_VERSION="1.1.0"
 
 # ---------------------------------------------------------------------------------------
 # logging
@@ -691,7 +691,8 @@ ql_lint() {
 
 # ql_lint_policy <dir>: WOOWTECH STANDARD rules for repo CI (NOT for install time: per-host
 # values may legitimately contain literal paths). Opt out per file with a comment line
-#   # ql-lint: allow <rule>     rules: floating-tag no-tag localhost-pull restart wantedby plaintext-secret literal-path
+#   # ql-lint: allow <rule>     rules: floating-tag no-tag localhost-pull restart wantedby
+#                                     success-exit plaintext-secret literal-path
 ql_lint_policy() {
   local dir=${1:?usage: ql_lint_policy <dir>} f b fails=0 out
   [[ -d $dir ]] || ql_die "ql_lint_policy: $dir is not a directory"
@@ -712,6 +713,7 @@ ql_lint_policy() {
         if (sec == "Container" && k == "Image") image = v
         if (sec == "Container" && k == "Pull") pull = v
         if (sec == "Service" && k == "Restart" && v != "no") restart = 1
+        if (sec == "Service" && k == "SuccessExitStatus" && v ~ /(^|[ \t])143([ \t]|$)/) success143 = 1
         if (sec == "Install" && k == "WantedBy" && v ~ /(^|[ \t])default\.target([ \t]|$)/) wanted = 1
         if (k == "Environment") {
           n = split(v, kv, /[ \t]+/)
@@ -741,6 +743,7 @@ ql_lint_policy() {
         }
         if (image ~ /^localhost\// && pull != "never" && !allowed("localhost-pull")) printf "%s: localhost/ image needs Pull=never\n", F
         if (!restart && !allowed("restart")) printf "%s: no Restart= in [Service]\n", F
+        if (!success143 && !allowed("success-exit")) printf "%s: no SuccessExitStatus=143 in [Service] (podman stops the container with SIGTERM; an entrypoint that does not trap it exits 143 and the unit ends up failed after a clean stop)\n", F
         if (!wanted && !allowed("wantedby")) printf "%s: no WantedBy=default.target in [Install]\n", F
       }' "$f")
     if [[ -n $out ]]; then

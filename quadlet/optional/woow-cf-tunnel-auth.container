@@ -37,6 +37,9 @@ AddCapability=CHOWN DAC_OVERRIDE SETGID SETUID
 Label=io.woowtech.app=woow-cf-tunnel
 
 [Service]
+# A container stopped by systemd is stopped with SIGTERM: an entrypoint that does not
+# trap it exits 143 (128+15), which would leave the unit failed after a clean stop.
+SuccessExitStatus=143
 Restart=always
 RestartSec=10
 TimeoutStartSec=300
