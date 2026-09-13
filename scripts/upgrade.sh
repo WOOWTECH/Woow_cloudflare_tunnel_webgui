@@ -77,7 +77,7 @@ cmd_prepare() {
   run=$(cf_new_run "$PREFIX") || ql_die "cannot create a run dir under $CF_STATE_ROOT"
   RUN=$run
   ql_info "1. building and rendering the new set (the running container is not touched)"
-  CF_LOCK_HELD=1 "$HERE/install.sh" --stage --stage-dir "$run/new" "${stage_args[@]}" \
+  "$HERE/install.sh" --stage --stage-dir "$run/new" "${stage_args[@]}" \
     || { rm -rf "$run"; ql_die "staging failed; nothing was changed"; }
 
   ql_info "2. snapshotting the installed units as the rollback target"
@@ -109,7 +109,7 @@ cmd_prepare() {
   METRICS_ADDR=$(sed -n 's/^Environment=CF_METRICS_ADDR=//p' "$run/new/woow-cf-tunnel.container")
 
   ql_info "3. backing up the data volume (the export CONTAINS THE TUNNEL TOKEN)"
-  CF_LOCK_HELD=1 "$HERE/backup.sh" >/dev/null || ql_die "backup failed; nothing was changed"
+  "$HERE/backup.sh" >/dev/null || ql_die "backup failed; nothing was changed"
 
   ql_info "4. baseline"
   cf_baseline "$run" 0 || ql_die "the baseline is not usable; nothing was changed"

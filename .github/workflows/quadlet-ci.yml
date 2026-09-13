@@ -30,6 +30,9 @@ jobs:
       - name: Quadlet dry-run + systemd-analyze verify
         run: tests/dryrun.sh
 
+      - name: The per-app lock is given back by a script that ends normally
+        run: tests/lock-release.sh
+
       - name: shellcheck
         run: |
           shopt -s globstar nullglob

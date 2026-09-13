@@ -32,7 +32,7 @@ fi
 EXAMPLE_ENV=$REPO/config/$APP.env.example
 [[ -f $EXAMPLE_ENV ]] || ql_die "missing $EXAMPLE_ENV"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/dryrun-$APP.XXXXXX")
-trap 'rm -rf "$WORK"' EXIT
+ql_cleanup work rm -rf "$WORK"
 VARS=$REPO/quadlet/render-vars
 if [[ ! -f $VARS ]]; then
   VARS=$WORK/render-vars.empty

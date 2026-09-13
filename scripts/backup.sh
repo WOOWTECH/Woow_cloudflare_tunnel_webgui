@@ -44,7 +44,7 @@ cf_volume_name() {
   printf '%s' "$v"
 }
 
-[[ ${CF_LOCK_HELD:-0} == 1 ]] || ql_lock woow-cf-tunnel
+ql_lock woow-cf-tunnel
 vol=$(cf_volume_name)
 out=$(ql_backup_volume "$vol" "$dir")
 
