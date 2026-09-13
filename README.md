@@ -196,6 +196,41 @@ automatically if the new unit does not reach the baseline. Outage: roughly 35-50
 Knobs for other layouts: `LEGACY_UNIT`, `LEGACY_GUI_PORT`, `EXTRA_UNITS`, `HTTP_OVERRIDES`,
 `RESCUE_CONTAINER`, `EXPECT_CONNS`.
 
+### What happens to the legacy container
+
+The new Quadlet container has a different name (`woow-cf-tunnel`), so the swap does not rename
+the legacy one — it just stops it and disables its unit. That keeps a rollback available only
+while nothing starts the container again. The user unit `podman-restart.service` runs
+`podman start --all --filter restart-policy=always` at boot, so on a host where that unit is
+**enabled** and the legacy container's restart policy is exactly `always`, the next reboot
+brings a second `cloudflared` up on the same tunnel token, the same `/data` volume and the same
+host ports (the legacy container is `--network=host`). podman 4.9.3 cannot repair that
+afterwards: `podman update` only rewrites cgroup limits, and a restart policy is fixed at
+create time.
+
+`preflight` therefore asks `ql_rollback_strategy`, which reads this host's real state — never
+its name — and prints the answer as `rollback shape:`.
+
+| Answer | When | What the swap does | What a rollback does |
+|---|---|---|---|
+| `rename` | the unit is disabled, or the legacy container's policy is not `always` | leaves the container stopped, as before | starts its unit again |
+| `capture` | the unit is enabled **and** the policy is `always` | `preflight` writes `<backup>/legacy-container/cf-tunnel-webgui/` (inspect, create command, image, policy, mounts) and the swap then removes the container with a plain `podman rm` — never `podman rm -v`, which would delete the anonymous volumes | `ql_recreate_container` recreates it stopped, with its original restart policy, **before** the legacy unit is started |
+
+The capture is taken in `preflight`, before any downtime, so a container the library cannot
+replay (an empty `CreateCommand` — created through the podman API rather than the CLI, which
+is what a docker-compose-over-the-socket container looks like) is refused while the legacy
+tunnel is still serving.
+
+On `woowtechopenclaw` — the host this migration is aimed at — `podman-restart.service` *is*
+enabled, but `cf-tunnel-webgui` is `unless-stopped`, a policy that unit's filter never matches.
+So the shape there is `rename` today and the swap behaves exactly as it always did; the
+`capture` shape exists because a policy can change and this script can be run on another host.
+
+No `--commit`: the GUI keeps its settings, its tunnel token and its credentials in the `/data`
+volume, which a plain `podman rm` never touches, and the live container's writable layer is
+about 777 kB of `__pycache__`. The container id and the IP/MAC lease are not preserved.
+`tests/harness/run-all.sh` covers both shapes (`migrate/openclaw/*`, `migrate/openclaw_always/*`).
+
 **From compose:** stop the compose project, set `CF_DATA_VOLUME` to its volume (usually
 `<project>_cf_data`), then run `scripts/install.sh`.
 
