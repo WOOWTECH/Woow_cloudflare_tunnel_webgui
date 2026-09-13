@@ -23,10 +23,12 @@
 #   QL_ENV_MODE_CHECK=0 ql_env_load skips the 0600/owner warning (repo example files in CI)
 #   QL_PATH_MOUNT_ALLOW containers (space/comma separated) allowed to hold a mount that
 #                       CONTAINS a guarded path, e.g. pi-web's %h:/host%h (ql_check_path_mounted)
+#   QL_CAPTURE_RW_WARN_BYTES  writable-layer size above which ql_capture_container warns
+#                       that --commit was not used                  (1048576)
 #   QL_LOG_PREFIX       log prefix                   (basename of $0)
 
 # shellcheck disable=SC2034 # public: read by sync-lib.sh, repo scripts and CI
-QL_LIB_VERSION="1.3.0"
+QL_LIB_VERSION="1.4.0"
 
 # ---------------------------------------------------------------------------------------
 # logging
@@ -995,6 +997,421 @@ ql_check_path_mounted() {
   ((${#q_broader[@]} == 0)) || ql_warn "$real sits inside a broader mount held by running container(s): ${q_broader[*]}; that is normal for a host-file-access container. Declare it (QL_PATH_MOUNT_ALLOW=<name>, or --allow-broader <name>) to silence this."
   return 0
 }
+# ---------------------------------------------------------------------------------------
+# legacy rollback model: rename, or capture-then-remove
+# ---------------------------------------------------------------------------------------
+# A migration keeps rollback available by renaming the legacy container and leaving it
+# stopped. That holds only while nothing starts it again. The user unit podman-restart.service
+# runs `podman start --all --filter restart-policy=always` at boot, so on a host where it is
+# enabled a renamed-but-stopped container whose policy is exactly `always` revives and fights
+# the new Quadlet container for its name, ports and volumes.
+#
+# podman 4.9.3 cannot defuse that in place: `podman update` only rewrites cgroup limits
+# (--cpus, --memory, --blkio-*, ...) and has no --restart, and the unit's filter compares the
+# policy string exactly, so `unless-stopped`, `on-failure` and `no` containers are never
+# started by it (verified on 4.9.3: the set `--filter restart-policy=always` returns is
+# exactly the set whose .HostConfig.RestartPolicy.Name is "always").
+#
+# Hence two rollback shapes. ql_rollback_strategy picks between them from the real conditions
+# of the host - is podman-restart.service enabled for this user, and what is this container's
+# policy - never from a host name:
+#   rename    rename the legacy container and leave it stopped (what toypark1234 does today)
+#   capture   ql_capture_container into the migration's backup dir, then `podman rm` it; the
+#             rollback runs ql_recreate_container
+#
+# What capture-then-remove cannot bring back is the container's WRITABLE LAYER: whatever was
+# written inside the container and not into a volume or a bind mount dies with it. A stack
+# whose own deploy/upgrade script mutates its running container (hermes' deploy.sh does) must
+# pass --commit, which commits the container to a local image first and makes the recreate
+# start from that image. Without --commit the capture records the writable-layer size, warns
+# when it is above QL_CAPTURE_RW_WARN_BYTES, and spells the loss out in the capture's
+# NOTES.txt. The container id and its IP/MAC lease do not survive either. Named AND anonymous
+# volumes do: the capture records the resolved volume names and the removal must be a plain
+# `podman rm` (never `podman rm -v`, which would delete the anonymous ones).
+QL_CAPTURE_FORMAT=1
+
+# ql_podman_restart_enabled: true when this user's podman-restart.service is enabled, i.e.
+# when `podman start --all --filter restart-policy=always` runs at boot. The rootful unit of
+# the same name never touches rootless containers, so only --user is asked.
+ql_podman_restart_enabled() {
+  local st
+  st=$(systemctl --user is-enabled podman-restart.service 2>/dev/null || true)
+  [[ $st == enabled || $st == enabled-runtime ]]
+}
+
+# ql_container_restart_policy <name>: prints always|unless-stopped|on-failure|no (an unset
+# policy prints "no", which is what podman means by it).
+ql_container_restart_policy() {
+  local name=${1:?usage: ql_container_restart_policy <name>} p
+  p=$(podman inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$name" 2>/dev/null) \
+    || ql_die "cannot inspect container $name"
+  [[ $p == "<no value>" ]] && p=''
+  printf '%s' "${p:-no}"
+}
+
+# ql_rollback_strategy <container>...: prints "rename" or "capture" (stdout, one word) and
+# explains itself on stderr. "capture" as soon as ONE of the containers would be revived at
+# boot, because the set is rolled back together.
+ql_rollback_strategy() {
+  (($#)) || ql_die "usage: ql_rollback_strategy <container>..."
+  local c p enabled=0
+  local -a q_revive=()
+  ql_podman_restart_enabled && enabled=1
+  for c in "$@"; do
+    p=$(ql_container_restart_policy "$c")
+    [[ $p == always ]] && q_revive+=("$c($p)")
+  done
+  if ((enabled)) && ((${#q_revive[@]})); then
+    ql_warn "podman-restart.service is enabled for this user: at boot it runs 'podman start --all --filter restart-policy=always', which would revive ${q_revive[*]} next to the new Quadlet container(s)"
+    ql_warn "podman 4.9.3 cannot change a restart policy in place (podman update is cgroup-only), so renaming is not enough here: capture the container(s) and remove them"
+    printf 'capture\n'
+    return 0
+  fi
+  if ((enabled)); then
+    ql_info "podman-restart.service is enabled, but no container in '$*' has restart-policy=always (that unit's filter matches the policy exactly), so renaming and leaving them stopped is safe"
+  else
+    ql_info "podman-restart.service is not enabled for this user, so renaming and leaving the legacy container(s) stopped is safe"
+  fi
+  printf 'rename\n'
+  return 0
+}
+
+# _ql_meta_get <file> <key>: last KEY=value in a capture meta file ("" if absent)
+_ql_meta_get() { [[ -f $1 ]] && sed -n "s/^$2=//p" "$1" | tail -n1; return 0; }
+
+# _ql_image_candidates <image_ref> <image_id> <out-array-name>: the spellings the image
+# argument of a CreateCommand may use. podman records what the operator typed
+# (`pgvector/pgvector:pg16`) while .ImageName is fully qualified
+# (`docker.io/pgvector/pgvector:pg16`), so both, and the ids, have to be tried.
+_ql_image_candidates() {
+  local ref=$1 id=$2
+  local -n __ql_ic=$3
+  __ql_ic=()
+  local r
+  for r in "$ref" "${ref#docker.io/library/}" "${ref#docker.io/}"; do
+    [[ -n $r ]] || continue
+    __ql_ic+=("$r")
+    [[ $r == *:latest ]] && __ql_ic+=("${r%:latest}")
+  done
+  [[ -n $id ]] && __ql_ic+=("$id" "${id:0:12}")
+  return 0
+}
+
+# _ql_normalize_create_argv <in-array> <out-array> <image-candidates-array> <out-index-var>
+#   Turns a recorded CreateCommand into an argv that recreates the container STOPPED and
+#   standalone. argv[0] (the podman path) is dropped: the recreate calls the podman on PATH.
+#   `run` becomes `create`, and the option tail loses the flags that only make sense for a
+#   live, systemd-managed run (-d, --rm, --replace, --cidfile, -a, --sig-proxy, --detach-keys)
+#   plus the two ql_recreate_container sets itself (--name, --restart). Filtering STOPS at the
+#   image argument, so a container command of its own that happens to be spelled `-d` or
+#   `--rm` is left alone. The image's index in the output is returned in <out-index-var>
+#   (-1 when no candidate matched, in which case the whole tail was filtered).
+#   Returns 1 when the input is not a podman run/create command at all.
+_ql_normalize_create_argv() {
+  local -n __ql_nin=$1 __ql_nout=$2 __ql_ncand=$3 __ql_nidx=$4
+  __ql_nout=() __ql_nidx=-1
+  local n=${#__ql_nin[@]} i verb=-1 a c
+  ((n > 1)) || return 1
+  for ((i = 1; i < n; i++)); do
+    case ${__ql_nin[i]} in run | create) verb=$i; break ;; esac
+  done
+  ((verb > 0)) || return 1
+  for ((i = 1; i < verb; i++)); do __ql_nout+=("${__ql_nin[i]}"); done
+  __ql_nout+=(create)
+  local past_image=0
+  for ((i = verb + 1; i < n; i++)); do
+    a=${__ql_nin[i]}
+    if ((!past_image)); then
+      for c in "${__ql_ncand[@]}"; do
+        if [[ $a == "$c" ]]; then past_image=1; __ql_nidx=${#__ql_nout[@]}; break; fi
+      done
+    fi
+    if ((!past_image)); then
+      case $a in
+        -d | --detach | --rm | --replace | --sig-proxy | -a | --attach) continue ;;
+        --detach=* | --rm=* | --replace=* | --sig-proxy=* | --attach=* | --cidfile=* | --name=* | --restart=* | --detach-keys=*) continue ;;
+        --cidfile | --name | --restart | --detach-keys) i=$((i + 1)); continue ;;
+      esac
+    fi
+    __ql_nout+=("$a")
+  done
+  return 0
+}
+
+# ql_capture_container [--commit] [--commit-tag REF] <container> <dest_dir>
+#   Writes everything needed to recreate <container> later into <dest_dir>/legacy-container/
+#   <container>/ (0700 dir, 0600 files: the inspect holds the container's environment, which
+#   is where compose stacks keep their passwords) and prints that directory.
+#     meta                 CAPTURE_FORMAT, NAME, ID, IMAGE_REF, IMAGE_ID, RESTART_POLICY,
+#                          RESTART_RETRIES, NETWORK_MODE, POD, AUTOREMOVE, SYSTEMD_UNIT,
+#                          COMPOSE_PROJECT/SERVICE, WRITABLE_LAYER_BYTES, COMMIT_IMAGE,
+#                          RECREATABLE, IMAGE_ARGV_INDEX, PODMAN_BIN, CAPTURED_AT, LIB_VERSION
+#     inspect.json         the full `podman inspect` - the authority, and what a human reads
+#     createcommand.argv0  .Config.CreateCommand, NUL separated (an argument may hold newlines)
+#     recreate.argv0       the same, normalized to a `podman create` that makes it STOPPED
+#     mounts networks ports labels     resolved, for the recreate's verification
+#     NOTES.txt            what this capture does and does not bring back
+#   A container created through the API rather than the CLI (docker-compose against the podman
+#   socket, `podman play`) has an EMPTY CreateCommand - seen live. There is nothing faithful to
+#   replay then, so the capture is still written (inspect.json keeps every fact) but it is
+#   marked RECREATABLE=0 and ql_recreate_container refuses it: a synthesized command would be
+#   a guess, and a guess is worse than telling the operator to rebuild it from inspect.json.
+#   Capture during the PREPARE phase, before any downtime, so that refusal surfaces early.
+#   --commit also commits the container to a local image and records it, which is the only way
+#   the writable layer survives the removal.
+ql_capture_container() {
+  local commit=0 tag=''
+  while [[ ${1:-} == --* ]]; do
+    case $1 in
+      --commit) commit=1 ;;
+      --commit-tag) tag=${2:?--commit-tag needs an image reference}; commit=1; shift ;;
+      *) ql_die "ql_capture_container: unknown option $1" ;;
+    esac
+    shift
+  done
+  local name=${1:?usage: ql_capture_container [--commit] <container> <dest_dir>}
+  local dest=${2:?usage: ql_capture_container [--commit] <container> <dest_dir>}
+  _ql_valid_name "$name" || ql_die "ql_capture_container: invalid container name '$name'"
+  podman container exists "$name" >/dev/null 2>&1 || ql_die "ql_capture_container: no such container: $name"
+  local dir=$dest/legacy-container/$name
+  if _ql_dry; then
+    ql_info "[dry-run] would capture $name (inspect, CreateCommand, image, restart policy, networks, mounts) into $dir"
+    ((commit)) && ql_info "[dry-run] would commit $name to an image first, so its writable layer survives"
+    printf '%s\n' "$dir"
+    return 0
+  fi
+  [[ ! -e $dir ]] || ql_die "ql_capture_container: $dir already exists; use a fresh backup directory"
+  _ql_mkdir_private "$dir"
+
+  local raw id image_id image_ref policy retries pod autoremove netmode unit proj svc
+  raw=$(podman inspect --format '{{.Id}}|{{.Image}}|{{.ImageName}}|{{.HostConfig.RestartPolicy.Name}}|{{.HostConfig.RestartPolicy.MaximumRetryCount}}|{{.Pod}}|{{.HostConfig.AutoRemove}}|{{.HostConfig.NetworkMode}}|{{index .Config.Labels "PODMAN_SYSTEMD_UNIT"}}|{{index .Config.Labels "io.podman.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' "$name") \
+    || ql_die "ql_capture_container: cannot inspect $name"
+  IFS='|' read -r id image_id image_ref policy retries pod autoremove netmode unit proj svc <<<"$raw"
+  local f
+  for f in id image_id image_ref policy pod autoremove netmode unit proj svc; do
+    if [[ ${!f} == "<no value>" ]]; then printf -v "$f" '%s' ''; fi
+  done
+  policy=${policy:-no}
+  if [[ -z $retries || $retries == "<no value>" ]]; then retries=0; fi
+  [[ -n $image_ref ]] || image_ref=$(podman inspect --format '{{.Config.Image}}' "$name" 2>/dev/null || true)
+
+  local um
+  um=$(umask)
+  umask 077
+  podman inspect "$name" >"$dir/inspect.json" || ql_die "ql_capture_container: cannot write $dir/inspect.json"
+  podman inspect --format '{{range .Config.CreateCommand}}{{printf "%s\x00" .}}{{end}}' "$name" >"$dir/createcommand.argv0" \
+    || ql_die "ql_capture_container: cannot read the CreateCommand of $name"
+  podman inspect --format '{{range .Mounts}}{{.Type}}|{{.Name}}|{{.Source}}|{{.Destination}}|{{.RW}}|{{.Propagation}}{{println}}{{end}}' "$name" >"$dir/mounts" \
+    || ql_die "ql_capture_container: cannot read the mounts of $name"
+  podman inspect --format '{{range $n, $v := .NetworkSettings.Networks}}{{$n}}|{{range $v.Aliases}}{{.}} {{end}}|{{$v.IPAddress}}|{{$v.MacAddress}}{{println}}{{end}}' "$name" >"$dir/networks" \
+    || ql_die "ql_capture_container: cannot read the networks of $name"
+  podman inspect --format '{{range $p, $b := .NetworkSettings.Ports}}{{$p}}|{{range $b}}{{.HostIP}}:{{.HostPort}} {{end}}{{println}}{{end}}' "$name" >"$dir/ports" \
+    || ql_warn "could not read the published ports of $name (kept in inspect.json)"
+  podman inspect --format '{{range $k, $v := .Config.Labels}}{{$k}}={{$v}}{{println}}{{end}}' "$name" >"$dir/labels" \
+    || ql_warn "could not read the labels of $name (kept in inspect.json)"
+
+  local -a q_cc=() q_new=() q_cand=()
+  mapfile -d '' -t q_cc <"$dir/createcommand.argv0"
+  _ql_image_candidates "$image_ref" "$image_id" q_cand
+  local recreatable=1 imgidx=-1 podman_bin=${q_cc[0]:-}
+  if ((${#q_cc[@]} == 0)); then
+    recreatable=0
+    ql_warn "$name has an empty CreateCommand: it was created through the API (docker-compose over the podman socket, podman play), not by the podman CLI. There is nothing to replay, so this capture is marked RECREATABLE=0; rebuild it by hand from $dir/inspect.json if a rollback is ever needed"
+  elif ! _ql_normalize_create_argv q_cc q_new q_cand imgidx; then
+    recreatable=0
+    ql_warn "the CreateCommand of $name is not a podman run/create command (${q_cc[*]:0:3} ...); marked RECREATABLE=0"
+  else
+    printf '%s\0' "${q_new[@]}" >"$dir/recreate.argv0" || ql_die "ql_capture_container: cannot write $dir/recreate.argv0"
+    ((imgidx >= 0)) || ql_warn "could not find the image argument of $name in its CreateCommand (recorded image: ${image_ref:-?}); the recreate cannot pin the image, and --commit cannot be applied"
+  fi
+
+  local rw commit_image=''
+  rw=$(podman inspect --size --format '{{.SizeRw}}' "$name" 2>/dev/null) || rw=''
+  [[ $rw =~ ^[0-9]+$ ]] || rw=''
+  if ((commit)); then
+    commit_image=${tag:-localhost/woow-legacy/$name:$(date +%Y%m%d-%H%M%S)}
+    podman commit --quiet -- "$name" "$commit_image" >/dev/null \
+      || ql_die "ql_capture_container: podman commit $name -> $commit_image failed; nothing was removed"
+    ql_info "committed $name -> $commit_image (its writable layer survives the removal)"
+    if ((imgidx < 0)); then
+      ql_die "ql_capture_container: $commit_image was committed but the image argument could not be located in the CreateCommand, so the recreate could not use it; recreate this container by hand from $dir/inspect.json"
+    fi
+  fi
+
+  {
+    printf 'CAPTURE_FORMAT=%s\n' "$QL_CAPTURE_FORMAT"
+    printf 'LIB_VERSION=%s\n' "$QL_LIB_VERSION"
+    printf 'CAPTURED_AT=%s\n' "$(date -Is)"
+    printf 'NAME=%s\n' "$name"
+    printf 'ID=%s\n' "$id"
+    printf 'IMAGE_REF=%s\n' "$image_ref"
+    printf 'IMAGE_ID=%s\n' "$image_id"
+    printf 'RESTART_POLICY=%s\n' "$policy"
+    printf 'RESTART_RETRIES=%s\n' "$retries"
+    printf 'NETWORK_MODE=%s\n' "$netmode"
+    printf 'POD=%s\n' "$pod"
+    printf 'AUTOREMOVE=%s\n' "$autoremove"
+    printf 'SYSTEMD_UNIT=%s\n' "$unit"
+    printf 'COMPOSE_PROJECT=%s\n' "$proj"
+    printf 'COMPOSE_SERVICE=%s\n' "$svc"
+    printf 'WRITABLE_LAYER_BYTES=%s\n' "${rw:-unknown}"
+    printf 'COMMIT_IMAGE=%s\n' "$commit_image"
+    printf 'RECREATABLE=%s\n' "$recreatable"
+    printf 'IMAGE_ARGV_INDEX=%s\n' "$imgidx"
+    printf 'PODMAN_BIN=%s\n' "$podman_bin"
+  } >"$dir/meta" || ql_die "ql_capture_container: cannot write $dir/meta"
+
+  cat >"$dir/NOTES.txt" <<EOF
+Capture of the legacy container "$name", taken by quadlet-lib $QL_LIB_VERSION.
+
+Recreate it with:
+  ql_recreate_container "$dir"          # stopped, with its original restart policy ($policy)
+Remove the live container with a plain "podman rm $name" - never "podman rm -v", which would
+delete the anonymous volumes this capture expects to find again.
+
+Restored by the recreate: the create command, the image, the restart policy, the networks and
+every named and anonymous volume and bind mount (they are not touched by the removal).
+
+NOT restored:
+  * the writable layer - anything written inside the container that did not land in a volume
+    or a bind mount. ${commit_image:+It was committed to $commit_image first, and the recreate starts from that image, so it does survive.}${commit_image:-This capture has no committed image (no --commit), so those files are gone. Writable layer at capture time: ${rw:-unknown} bytes.}
+  * the container id ($id) and anything keyed on it
+  * the IP and MAC lease on its networks; the new container gets fresh ones
+  * running state: processes, uptime, exec sessions, checkpoints
+EOF
+  umask "$um"
+  if [[ -n $rw ]] && ((rw > ${QL_CAPTURE_RW_WARN_BYTES:-1048576})) && [[ -z $commit_image ]]; then
+    ql_warn "$name has ${rw} bytes in its writable layer and was captured without --commit: those files will not come back. Re-capture with --commit if this stack writes into its own container"
+  fi
+  ql_info "captured container $name -> $dir (policy=$policy, image=${image_ref:-?}, recreatable=$recreatable)"
+  printf '%s\n' "$dir"
+}
+
+# _ql_mount_key <mounts-file>: the comparable part of a capture's mounts, sorted
+_ql_mount_key() {
+  [[ -f $1 ]] || return 0
+  local t n s d rw
+  while IFS='|' read -r t n s d rw _; do
+    [[ -n $d ]] || continue
+    if [[ $t == volume ]]; then printf '%s|%s|%s|%s\n' "$t" "$n" "$d" "$rw"; else printf '%s|%s|%s|%s\n' "$t" "$s" "$d" "$rw"; fi
+  done <"$1" | LC_ALL=C sort
+  return 0
+}
+
+# ql_recreate_container <capture_dir> [<container>] [--name NEW] [--policy P] [--image REF]
+#                       [--start] [--force-partial]
+#   Recreates the captured container, STOPPED, and prints its name. <capture_dir> is what
+#   ql_capture_container printed; passing the backup directory plus the container name works
+#   too. The restart policy comes from the capture, because podman 4.9.3 cannot change one
+#   after the fact: --restart is stripped out of the replayed argv and re-added from
+#   RESTART_POLICY, so a rollback never silently leaves the container on a different policy
+#   than it had. --policy is the explicit, logged way to park it inert instead. --image
+#   overrides the image; a committed image (--commit at capture time) is used automatically.
+#   After the create it verifies the restart policy (fatal on a mismatch), the mounts and the
+#   networks against the capture.
+ql_recreate_container() {
+  local dir='' name='' want_name='' policy='' image='' start=0 partial=0
+  while (($#)); do
+    case $1 in
+      --name) want_name=${2:?--name needs a container name}; shift ;;
+      --policy) policy=${2:?--policy needs always|unless-stopped|on-failure[:N]|no}; shift ;;
+      --image) image=${2:?--image needs an image reference}; shift ;;
+      --start) start=1 ;;
+      --force-partial) partial=1 ;;
+      -*) ql_die "ql_recreate_container: unknown option $1" ;;
+      *) if [[ -z $dir ]]; then dir=$1; elif [[ -z $name ]]; then name=$1; else ql_die "ql_recreate_container: too many arguments"; fi ;;
+    esac
+    shift
+  done
+  [[ -n $dir ]] || ql_die "usage: ql_recreate_container <capture_dir> [<container>] [--name NEW] [--policy P] [--image REF] [--start]"
+  [[ -n $name && -d $dir/legacy-container/$name ]] && dir=$dir/legacy-container/$name
+  [[ -f $dir/meta ]] || ql_die "ql_recreate_container: $dir is not a container capture (no meta file)"
+
+  local fmt cap_name cap_policy retries commit_image imgidx recreatable image_ref image_id pod
+  fmt=$(_ql_meta_get "$dir/meta" CAPTURE_FORMAT)
+  [[ $fmt == "$QL_CAPTURE_FORMAT" ]] || ql_die "ql_recreate_container: $dir was written by capture format ${fmt:-?}, this lib understands $QL_CAPTURE_FORMAT"
+  cap_name=$(_ql_meta_get "$dir/meta" NAME)
+  cap_policy=$(_ql_meta_get "$dir/meta" RESTART_POLICY)
+  retries=$(_ql_meta_get "$dir/meta" RESTART_RETRIES)
+  commit_image=$(_ql_meta_get "$dir/meta" COMMIT_IMAGE)
+  imgidx=$(_ql_meta_get "$dir/meta" IMAGE_ARGV_INDEX)
+  recreatable=$(_ql_meta_get "$dir/meta" RECREATABLE)
+  image_ref=$(_ql_meta_get "$dir/meta" IMAGE_REF)
+  image_id=$(_ql_meta_get "$dir/meta" IMAGE_ID)
+  pod=$(_ql_meta_get "$dir/meta" POD)
+  local target=${want_name:-$cap_name}
+  [[ -n $target ]] || ql_die "ql_recreate_container: $dir/meta has no NAME"
+
+  if [[ $recreatable != 1 ]]; then
+    ((partial)) || ql_die "ql_recreate_container: the capture of $cap_name is marked RECREATABLE=0 (it has no replayable CreateCommand: created through the API, not the CLI). Rebuild it by hand from $dir/inspect.json, or pass --force-partial if you know $dir/recreate.argv0 is right"
+    ql_warn "--force-partial: recreating $cap_name from a capture marked RECREATABLE=0"
+  fi
+  [[ -f $dir/recreate.argv0 ]] || ql_die "ql_recreate_container: $dir/recreate.argv0 is missing; rebuild $cap_name by hand from $dir/inspect.json"
+
+  # the policy to restore: the captured one unless the caller overrides it out loud
+  local use_policy=$cap_policy
+  if [[ -n $policy ]]; then
+    use_policy=$policy
+    ql_warn "--policy $policy: recreating $target with a restart policy that is NOT the one it had ($cap_policy). Its rollback is now a deliberate change, not a restore"
+  fi
+  [[ -n $use_policy ]] || use_policy=no
+  if [[ $use_policy == on-failure && ${retries:-0} != 0 ]]; then use_policy=on-failure:$retries; fi
+
+  local use_image=$image
+  [[ -z $use_image && -n $commit_image ]] && use_image=$commit_image
+
+  local -a q_argv=()
+  mapfile -d '' -t q_argv <"$dir/recreate.argv0"
+  ((${#q_argv[@]})) || ql_die "ql_recreate_container: $dir/recreate.argv0 is empty"
+  local verb=-1 i
+  for ((i = 0; i < ${#q_argv[@]}; i++)); do
+    [[ ${q_argv[i]} == create ]] && { verb=$i; break; }
+  done
+  ((verb >= 0)) || ql_die "ql_recreate_container: $dir/recreate.argv0 has no create verb"
+  if [[ -n $use_image ]]; then
+    [[ $imgidx =~ ^[0-9]+$ ]] || ql_die "ql_recreate_container: the image argument of $cap_name was never located, so it cannot be replaced with $use_image; recreate it by hand from $dir/inspect.json"
+    q_argv[imgidx]=$use_image
+    ql_info "recreating $target from $use_image${commit_image:+ (the image committed at capture time: its writable layer comes back)}"
+  elif [[ -n $image_ref && -n $image_id ]]; then
+    local now
+    now=$(podman image inspect --format '{{.Id}}' "$image_ref" 2>/dev/null || true)
+    if [[ -n $now && $now != "$image_id" ]]; then
+      ql_warn "$image_ref no longer resolves to the image $cap_name ran (${image_id:0:12}, now ${now:0:12}); pass --image ${image_id:0:12} to pin the original"
+    fi
+  fi
+  local -a q_run=("${q_argv[@]:0:verb+1}" "--name=$target" "--restart=$use_policy" "${q_argv[@]:verb+1}")
+
+  if _ql_dry; then
+    ql_info "[dry-run] would run: podman ${q_run[*]}"
+    printf '%s\n' "$target"
+    return 0
+  fi
+  ! podman container exists "$target" >/dev/null 2>&1 \
+    || ql_die "ql_recreate_container: a container named $target already exists; remove or rename it first"
+  [[ -z $pod ]] || ql_warn "$cap_name was in pod $pod; the recreate only rejoins it if the pod still exists"
+  podman "${q_run[@]}" >/dev/null || ql_die "ql_recreate_container: podman ${q_run[*]} failed"
+
+  local got
+  got=$(ql_container_restart_policy "$target")
+  [[ $got == "${use_policy%%:*}" ]] \
+    || ql_die "ql_recreate_container: $target came back with restart policy '$got', not '${use_policy%%:*}'; podman 4.9.3 cannot change that afterwards (podman update is cgroup-only), so remove it and fix $dir/recreate.argv0"
+  local before after
+  before=$(_ql_mount_key "$dir/mounts")
+  podman inspect --format '{{range .Mounts}}{{.Type}}|{{.Name}}|{{.Source}}|{{.Destination}}|{{.RW}}|{{.Propagation}}{{println}}{{end}}' "$target" >"$dir/.mounts.now" 2>/dev/null || true
+  after=$(_ql_mount_key "$dir/.mounts.now")
+  rm -f -- "$dir/.mounts.now"
+  [[ $before == "$after" ]] || ql_warn "the mounts of the recreated $target differ from the capture; compare $dir/mounts with 'podman inspect $target'"
+  before=$(cut -d'|' -f1 <"$dir/networks" | LC_ALL=C sort)
+  after=$(podman inspect --format '{{range $n, $v := .NetworkSettings.Networks}}{{$n}}{{println}}{{end}}' "$target" 2>/dev/null | LC_ALL=C sort)
+  [[ $before == "$after" ]] || ql_warn "the networks of the recreated $target (${after//$'\n'/ }) differ from the capture (${before//$'\n'/ })"
+  ql_info "recreated container $target from $dir (restart policy $use_policy, stopped)"
+  if ((start)); then
+    podman start "$target" >/dev/null || ql_die "ql_recreate_container: podman start $target failed"
+    ql_info "started $target"
+  fi
+  printf '%s\n' "$target"
+}
+
 # ---------------------------------------------------------------------------------------
 # images
 # ---------------------------------------------------------------------------------------
