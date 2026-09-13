@@ -1,0 +1,36 @@
+# .github/workflows/quadlet-ci.yml: vendored by Woow_quadlet_migration_plan/lib/sync-lib.sh.
+# Static checks only: no container is started. Repo-specific jobs belong in a separate workflow.
+name: quadlet-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quadlet:
+    runs-on: ubuntu-24.04          # apt podman = 4.9.3, systemd 255: same as the WOOWTECH hosts
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install podman and shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman shellcheck
+          podman --version
+          /usr/libexec/podman/quadlet -version
+          shellcheck --version | sed -n 2p
+
+      - name: Vendored quadlet-lib is unmodified
+        run: sha256sum -c scripts/lib/quadlet-lib.manifest
+
+      - name: Quadlet dry-run + systemd-analyze verify
+        run: tests/dryrun.sh
+
+      - name: shellcheck
+        run: |
+          shopt -s globstar nullglob
+          shellcheck -x scripts/**/*.sh tests/*.sh

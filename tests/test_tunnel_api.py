@@ -39,3 +39,17 @@ async def test_tunnel_start_calls_pm(client, mock_pm):
     resp = await client.post("/api/tunnel/start")
     assert resp.status_code == 200
     mock_pm.start.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_tunnel_start_in_token_mode_passes_a_token_file_not_the_token(
+        client, mock_pm, tmp_config_dir):
+    secret = "eyJhIjoidGVzdC1hY2NvdW50In0-not-a-real-token"
+    resp = await client.put("/api/config", json={"mode": "token", "tunnel_token": secret})
+    assert resp.status_code == 200
+    resp = await client.post("/api/tunnel/start")
+    assert resp.status_code == 200
+    args = mock_pm.start.await_args.args[0]
+    assert args[-2:] == ["--token-file", str(tmp_config_dir / ".tunnel_token")]
+    assert not any(secret in a for a in args)
+    assert "--token" not in args

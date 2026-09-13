@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Mock ss for tests/harness: a port is "listening" while the unit that owns it is active,
+# and `-p` (cf_session_rides_tunnel looking up who carries this ssh session) answers from
+# MOCK_SSH_CARRIER -- the process holding the client end of the loopback pair, which is what
+# tells a cloudflared session from a tailnet one.
+S=${MOCK_STATE:?}
+st() { cat "$S/$1" 2>/dev/null || echo 0; }
+port=$(printf '%s' "$*" | sed -n 's/.*sport = :\([0-9]*\).*/\1/p')
+if [[ " $* " == *" -tnpH "* ]]; then
+  read -r csrc cport _ dport <<<"${SSH_CONNECTION:-}"
+  fmt=%s:%s
+  [[ $csrc == *:* ]] && fmt='[%s]:%s'
+  if [[ -n ${MOCK_SSH_CARRIER:-} && $port == "$cport" ]]; then
+    # shellcheck disable=SC2059 # fmt picks the v4/v6 spelling ss(8) would print
+    printf "ESTAB 0      0      $fmt $fmt users:((\"%s\",pid=4321,fd=9))\n" \
+      "$csrc" "$cport" "$csrc" "$dport" "$MOCK_SSH_CARRIER"
+  fi
+  exit 0
+fi
+L=$(st legacy_active)
+N=$(st units/woow-cf-tunnel.service/active)
+A=$(st units/woow-cf-tunnel-auth.service/active)
+busy=0
+[[ $port == "${LEGACY_GUI_PORT:-18000}" && $L == 1 ]] && busy=1
+[[ $port == "${GUI_PORT:-18000}" && $N == 1 ]] && busy=1
+[[ $port == 20241 && ($L == 1 || $N == 1) ]] && busy=1
+[[ $port == 8888 && $A == 1 ]] && busy=1
+[[ -n ${MOCK_BUSY_PORTS:-} && " $MOCK_BUSY_PORTS " == *" $port "* ]] && busy=1
+((busy)) && echo "LISTEN 0 4096 127.0.0.1:$port 0.0.0.0:*"
+exit 0

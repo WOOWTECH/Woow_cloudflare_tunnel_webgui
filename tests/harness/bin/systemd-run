@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Mock systemd-run for tests/harness: runs the command detached (setsid), like a
+# transient user service, and records its pid in $MOCK_STATE/detached.pid.
+echo "systemd-run $*" >>"$MOCK_STATE/calls.log"
+while (($#)); do case $1 in --*) shift ;; *) break ;; esac; done
+setsid "$@" >"$MOCK_STATE/detached.out" 2>&1 </dev/null &
+echo $! >"$MOCK_STATE/detached.pid"

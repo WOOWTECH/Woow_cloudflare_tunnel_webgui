@@ -2,7 +2,7 @@
 
 - 日期:2026-06-27
 - 分支:`feat/local-managed-generic`
-- 狀態:設計定稿(待實作)
+- 狀態:歷史文件。已實作,且 1.1.0 起改為 Quadlet + systemd 部署,請以 README 為準。
 
 ## 1. 目標與前提
 
@@ -141,8 +141,8 @@ Web GUI 以狀態機帶使用者走完 add-on 在背景做的事:
 
 ```bash
 # Docker 與 Podman 完全相同
-docker run -d --name cf-tunnel-webgui -p 8888:8888 -v cf_data:/data <image>
-podman run -d --name cf-tunnel-webgui -p 8888:8888 -v cf_data:/data <image>
+docker run -d --name cf-tunnel-webgui -p 8888:8000 -v cf_data:/data <image>   # 容器內是 8000
+podman run -d --name cf-tunnel-webgui -p 8888:8000 -v cf_data:/data <image>   # 建議改用 scripts/install.sh
 ```
 
 無 socket 掛載、無引擎專屬參數 → 達成「通用部署」。

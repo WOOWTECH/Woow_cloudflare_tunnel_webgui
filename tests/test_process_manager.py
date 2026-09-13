@@ -45,10 +45,49 @@ async def test_stop_is_idempotent_on_exited_process():
     assert pm.is_running() is False
 
 
-def test_build_run_args_token_mode():
-    args = build_run_args(mode="token", token="TOK", binary="cloudflared")
+def test_build_run_args_token_mode_reads_token_from_file():
+    args = build_run_args(mode="token", binary="cloudflared",
+                          token_file="/data/.tunnel_token")
     assert args == ["cloudflared", "tunnel", "--no-autoupdate",
-                    "run", "--token", "TOK"]
+                    "run", "--token-file", "/data/.tunnel_token"]
+
+
+def test_build_run_args_token_mode_defaults_to_the_data_volume_file():
+    args = build_run_args(mode="token", binary="cloudflared")
+    assert args[-2:] == ["--token-file", "/data/.tunnel_token"]
+
+
+def test_build_run_args_never_puts_a_token_flag_in_argv():
+    # Quadlet runs the container inside the unit's cgroup, so
+    # `systemctl --user status` prints cloudflared's argv. The token must
+    # never be part of it; cloudflared reads it from --token-file instead.
+    args = build_run_args(mode="token", binary="cloudflared",
+                          token_file="/data/.tunnel_token")
+    assert "--token" not in args
+    assert not any(a.startswith("--token=") for a in args)
+
+
+def test_build_run_args_pins_metrics_address_when_given():
+    args = build_run_args(mode="token", binary="cloudflared",
+                          metrics="127.0.0.1:20241")
+    i = args.index("--metrics")
+    assert args[i + 1] == "127.0.0.1:20241"
+    assert i < args.index("run")  # a `tunnel` flag, not a `run` flag
+
+
+def test_build_run_args_omits_metrics_by_default():
+    args = build_run_args(mode="local", binary="cloudflared", tunnel_name="demo")
+    assert "--metrics" not in args
+
+
+def test_metrics_addr_reads_the_environment(monkeypatch):
+    from backend.services.process_manager import metrics_addr
+    monkeypatch.setenv("CF_METRICS_ADDR", "127.0.0.1:20241")
+    assert metrics_addr() == "127.0.0.1:20241"
+    monkeypatch.setenv("CF_METRICS_ADDR", "")
+    assert metrics_addr() is None
+    monkeypatch.delenv("CF_METRICS_ADDR")
+    assert metrics_addr() is None
 
 
 def test_build_run_args_local_mode():
@@ -61,7 +100,7 @@ def test_build_run_args_local_mode():
 
 
 def test_build_run_args_appends_post_quantum_and_loglevel():
-    args = build_run_args(mode="token", token="T", binary="cloudflared",
+    args = build_run_args(mode="token", binary="cloudflared",
                           post_quantum=True, log_level="debug")
     assert "--post-quantum" in args
     assert args[args.index("--loglevel") + 1] == "debug"
@@ -73,9 +112,18 @@ from backend.services.process_manager import autostart_args
 
 def test_autostart_token_mode_with_token_returns_args():
     args = autostart_args({"mode": "token"}, token="TOK",
-                          cert_exists=False, tunnel_exists=False, config_exists=False)
+                          cert_exists=False, tunnel_exists=False, config_exists=False,
+                          token_file="/data/.tunnel_token")
     assert args is not None
-    assert "--token" in args and "TOK" in args
+    assert args[-2:] == ["--token-file", "/data/.tunnel_token"]
+    assert "TOK" not in args and "--token" not in args
+
+
+def test_autostart_passes_metrics_address():
+    args = autostart_args({"mode": "token"}, token="TOK",
+                          cert_exists=False, tunnel_exists=False, config_exists=False,
+                          metrics="127.0.0.1:20241")
+    assert args[args.index("--metrics") + 1] == "127.0.0.1:20241"
 
 
 def test_autostart_token_mode_without_token_returns_none():

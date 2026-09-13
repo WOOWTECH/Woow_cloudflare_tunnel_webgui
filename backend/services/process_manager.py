@@ -1,5 +1,6 @@
 """Manage the cloudflared child process lifecycle (engine-agnostic)."""
 import asyncio
+import os
 import signal
 from collections import deque
 from typing import Optional
@@ -71,23 +72,43 @@ class ProcessManager:
         return list(self._logs)
 
 
+DEFAULT_TOKEN_FILE = "/data/.tunnel_token"
+
+
+def metrics_addr() -> str | None:
+    """cloudflared metrics/readiness address from CF_METRICS_ADDR, or None.
+
+    The Quadlet unit sets it (127.0.0.1:20241) so the container healthcheck
+    and the migration watchdog always know where /ready is. Without it,
+    cloudflared picks the first free port of 20241-20245 by itself.
+    """
+    return os.environ.get("CF_METRICS_ADDR") or None
+
+
 def build_run_args(
     mode: str,
     binary: str = "cloudflared",
-    token: str = "",
+    token_file: str = DEFAULT_TOKEN_FILE,
     origincert: str = "/data/cert.pem",
     config: str = "/data/config.json",
     tunnel_name: str = "",
     post_quantum: bool = False,
     log_level: str = "info",
+    metrics: str | None = None,
 ) -> list[str]:
+    """cloudflared argv. Token mode passes the token FILE, never the token:
+    argv is readable by every local user (ps) and, under Quadlet, printed by
+    `systemctl --user status`. cloudflared reads the file and trims whitespace.
+    """
     args = [binary, "tunnel", "--no-autoupdate"]
+    if metrics:
+        args.extend(["--metrics", metrics])
     if post_quantum:
         args.append("--post-quantum")
     if log_level and log_level != "info":
         args.extend(["--loglevel", log_level])
     if mode == "token":
-        args.extend(["run", "--token", token])
+        args.extend(["run", "--token-file", token_file])
     else:
         args.extend(["--origincert", origincert, "--config", config,
                      "run", tunnel_name])
@@ -101,21 +122,25 @@ def autostart_args(
     tunnel_exists: bool,
     config_exists: bool,
     binary: str = "cloudflared",
+    token_file: str = DEFAULT_TOKEN_FILE,
+    metrics: str | None = None,
 ) -> list[str] | None:
     """Return cloudflared run args if the tunnel is fully configured, else None.
 
     Used at container startup to auto-resume the tunnel (parity with the old
-    auto-running connector). Token mode needs a token; local mode needs the
-    cert, tunnel credentials, and generated ingress config all present.
+    auto-running connector). Token mode needs a stored token (only its
+    presence is checked; cloudflared reads it from token_file); local mode
+    needs the cert, tunnel credentials, and generated ingress config.
     """
     mode = cfg.get("mode", "local")
     if mode == "token":
         if not token:
             return None
         return build_run_args(
-            mode="token", token=token, binary=binary,
+            mode="token", token_file=token_file, binary=binary,
             post_quantum=cfg.get("post_quantum", False),
             log_level=cfg.get("log_level", "info"),
+            metrics=metrics,
         )
     if cert_exists and tunnel_exists and config_exists:
         return build_run_args(
@@ -123,5 +148,6 @@ def autostart_args(
             tunnel_name=cfg.get("tunnel_name", ""),
             post_quantum=cfg.get("post_quantum", False),
             log_level=cfg.get("log_level", "info"),
+            metrics=metrics,
         )
     return None

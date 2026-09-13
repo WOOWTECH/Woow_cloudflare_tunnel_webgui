@@ -2,27 +2,28 @@
   <img src="frontend/public/favicon.svg" alt="CF Tunnel Logo" width="80">
 </p>
 
-<h1 align="center">Cloudflare Tunnel Web GUI for Podman</h1>
+<h1 align="center">Cloudflare Tunnel Web GUI</h1>
 
 <p align="center">
-  <strong>透過 Podman 管理 Cloudflare Tunnel 容器的現代化 Web 介面 — 完整相容 Home Assistant OS (HAOS) Cloudflared add-on 參數。</strong>
+  <strong>用瀏覽器管理 Cloudflare Tunnel。單一容器，透過 Podman Quadlet 交給 systemd 監管。</strong>
 </p>
 
 <p align="center">
   <a href="README.md">English</a> &bull;
-  <a href="#%E6%88%AA%E5%9C%96%E5%B1%95%E7%A4%BA">截圖展示</a> &bull;
-  <a href="#%E5%AE%89%E8%A3%9D">安裝</a> &bull;
-  <a href="#%E6%9E%B6%E6%A7%8B">架構</a> &bull;
-  <a href="#api-%E5%8F%83%E8%80%83">API 參考</a>
+  <a href="#安裝">安裝</a> &bull;
+  <a href="#日常操作">操作</a> &bull;
+  <a href="#安全性">安全性</a> &bull;
+  <a href="#從既有部署遷移">遷移</a> &bull;
+  <a href="#api-參考">API</a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/Vue-3.5-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
+  <img src="https://img.shields.io/badge/Podman-4.9%2B%20(Quadlet)-892CA0?logo=podman&logoColor=white" alt="Podman">
+  <img src="https://img.shields.io/badge/systemd-user%20units-informational" alt="systemd">
+  <img src="https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Podman-5.2+-892CA0?logo=podman&logoColor=white" alt="Podman">
-  <img src="https://img.shields.io/badge/Cloudflare-Tunnel-F38020?logo=cloudflare&logoColor=white" alt="Cloudflare">
-  <img src="https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Vue-3.5-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
+  <img src="https://img.shields.io/badge/cloudflared-2026.6.1-F38020?logo=cloudflare&logoColor=white" alt="cloudflared">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
 </p>
 
@@ -30,574 +31,253 @@
 
 ## 概述
 
-本專案提供一個**容器化的 Web GUI**，用於透過 [Podman](https://podman.io/) 管理 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) (`cloudflared`)。它以簡潔的瀏覽器介面取代手動 CLI 操作，提供隧道設定管理、容器生命週期控制，以及即時日誌串流功能。
+單一容器同時執行 FastAPI + Vue 的網頁介面，**以及它以子行程監管的 `cloudflared` 連接器**。
+貼上 tunnel token（或在介面上登入 Cloudflare），隧道就會運作。不需要 Podman socket、
+不需要第二個容器，也不需要下指令。
 
-### 為什麼需要這個專案？
-
-| 挑戰 | 解決方案 |
-|------|----------|
-| 管理 `cloudflared` 需要 CLI 專業知識 | 直覺式 Web GUI 表單與開關 |
-| 設定散落在各種 CLI 旗標中 | 集中式設定頁面，附帶驗證機制 |
-| 無法即時了解隧道健康狀態 | 即時儀表板與狀態卡片 |
-| 檢視日誌需要 `podman logs` | WebSocket 即時日誌串流與篩選 |
-| HAOS Cloudflared add-on 參數不可用 | 完整 HAOS 參數相容性 |
-| 手動處理 Token 有安全風險 | Token 以 Podman secret 儲存，永不寫入磁碟 |
-
-## 功能特色
-
-### 儀表板 (Dashboard)
-- 即時隧道狀態監控（運行中 / 已停止 / 錯誤）
-- Podman 連線健康檢查
-- Token 設定狀態顯示
-- 一鍵 啟動 / 停止 / 重啟 控制
-
-### 設定管理 (Config)
-- **基本設定** — 隧道 Token（遮罩顯示）、外部主機名稱、隧道名稱、容器名稱、容器映像（白名單驗證）
-- **額外主機** — 動態新增/移除主機名稱到服務的路由對應，支援分塊傳輸編碼開關
-- **Catch-All 服務** — 未匹配主機名稱的後備服務 URL，支援 Nginx Proxy Manager 整合開關
-- **進階設定** — 後量子密碼學、8 級日誌詳細程度、額外 CLI 參數
-- **安全防護** — Shell 注入防護、映像白名單、CSRF 雙重提交 Cookie 保護
-
-### 日誌 (Logs)
-- 基於 WebSocket 的即時日誌串流
-- 篩選/搜尋與文字高亮
-- 自動捲動與手動覆蓋
-- 日誌下載與清除功能
-- 連線狀態指示器
-
-### HAOS 相容性
-
-完整支援 [Home Assistant OS Cloudflared add-on](https://github.com/brenner-tobias/addon-cloudflared) 的所有設定參數：
-
-| HAOS 參數 | GUI 欄位 | 狀態 |
-|-----------|----------|------|
-| `external_hostname` | 外部主機名稱 | 已支援 |
-| `additional_hosts` | 額外主機（動態列表） | 已支援 |
-| `tunnel_name` | 隧道名稱 | 已支援 |
-| `catch_all_service` | Catch-All 服務 URL | 已支援 |
-| `nginx_proxy_manager` | Nginx Proxy Manager 開關 | 已支援 |
-| `post_quantum` | 後量子密碼學開關 | 已支援 |
-| `log_level` | 日誌等級下拉選單（8 級） | 已支援 |
-
-## 架構
-
-### 系統架構圖
-
-```mermaid
-graph TB
-    subgraph Browser["瀏覽器"]
-        UI["Vue 3 SPA<br/>儀表板 | 設定 | 日誌"]
-    end
-
-    subgraph Container["cf-tunnel-gui 容器"]
-        subgraph Backend["FastAPI 後端 :8000"]
-            API["REST API<br/>/api/health<br/>/api/config<br/>/api/tunnel"]
-            WS["WebSocket<br/>/api/logs/stream"]
-            CSRF["CSRF 中介軟體<br/>雙重提交 Cookie"]
-            CM["ConfigManager<br/>settings.json"]
-            PM["PodmanManager<br/>容器生命週期"]
-            VAL["Validator<br/>映像白名單<br/>注入防護"]
-        end
-        STATIC["靜態檔案<br/>Vue 建置產出"]
-    end
-
-    subgraph Host["主機系統"]
-        SOCK["Podman Socket<br/>/run/podman/podman.sock"]
-        CF["cloudflared 容器<br/>Cloudflare Tunnel"]
-    end
-
-    subgraph Cloud["Cloudflare 邊緣網路"]
-        EDGE["Cloudflare 網路<br/>DNS + 隧道路由"]
-    end
-
-    UI -->|"HTTP/REST"| API
-    UI -->|"WebSocket"| WS
-    API --> CSRF
-    CSRF --> CM
-    CSRF --> PM
-    CSRF --> VAL
-    PM -->|"Podman API"| SOCK
-    SOCK -->|"容器管理"| CF
-    CF -->|"加密隧道"| EDGE
-    WS -->|"日誌串流"| SOCK
-    Browser -->|"HTTPS"| EDGE
-    EDGE -->|"隧道"| CF
-```
-
-### 請求流程圖
-
-```mermaid
-sequenceDiagram
-    participant B as 瀏覽器
-    participant F as FastAPI
-    participant C as CSRF 中介軟體
-    participant V as 驗證器
-    participant CM as ConfigManager
-    participant P as PodmanManager
-    participant CF as cloudflared
-
-    B->>F: GET /api/config
-    F->>C: 驗證 CSRF cookie
-    C->>CM: 載入設定
-    CM-->>F: 設定（Token 已遮罩）
-    F-->>B: JSON 回應
-
-    B->>F: PUT /api/config
-    F->>C: 驗證 CSRF cookie + header
-    C->>V: 驗證映像、容器名稱、參數
-    V-->>C: 驗證結果
-    C->>CM: 儲存設定
-    CM-->>F: 更新後的設定
-    F-->>B: 200 OK
-
-    B->>F: POST /api/tunnel/restart
-    F->>P: 重啟容器
-    P->>CF: podman restart cloudflared
-    CF-->>P: 容器已重啟
-    P-->>F: 新狀態
-    F-->>B: 容器狀態
-```
-
-### 技術堆疊
+`scripts/install.sh` 會把它安裝成 **rootless Podman Quadlet 單元，由使用者層級的 systemd 管理**：
+開機自動啟動（需 linger）、當掉會自動重啟，而且從 1.1.0 起，**後端還活著但隧道死掉時也會自救**。
 
 ```mermaid
 graph LR
-    subgraph 前端
-        VUE["Vue 3.5"]
-        TS["TypeScript 5.7"]
-        VITE["Vite 6"]
-        TW["Tailwind CSS 3.4"]
-        PINIA["Pinia 2.3"]
-        ROUTER["Vue Router 4.5"]
+    subgraph U["woow-cf-tunnel.service（systemd --user, Quadlet）"]
+        subgraph C["容器 woow-cf-tunnel（network=host）"]
+            API["FastAPI + Vue 介面<br/>127.0.0.1:18000"]
+            CFD["cloudflared 子行程<br/>metrics 127.0.0.1:20241"]
+            HC["/usr/local/bin/cf-webui-healthcheck"]
+        end
+        VOL[("volume /data<br/>settings.json<br/>.tunnel_token 0600<br/>.csrf_secret")]
     end
+    EDGE["Cloudflare 邊緣節點"]
+    ORIG["本機來源服務<br/>localhost:22、:8123 …"]
 
-    subgraph 後端
-        FAPI["FastAPI 0.115"]
-        UV["Uvicorn 0.34"]
-        PYD["Pydantic 2.10"]
-        POD["Podman SDK 5.2"]
-        SCRRF["Starlette-CSRF 3.0"]
-        WSOCK["WebSockets 14.2"]
-    end
-
-    subgraph 基礎設施
-        DOCK["多階段 Dockerfile"]
-        COMP["Docker Compose 3.8"]
-        TINI["Tini (PID 1)"]
-    end
-
-    VUE --> TS
-    TS --> VITE
-    VUE --> TW
-    VUE --> PINIA
-    VUE --> ROUTER
-
-    FAPI --> UV
-    FAPI --> PYD
-    FAPI --> POD
-    FAPI --> SCRRF
-    FAPI --> WSOCK
-
-    DOCK --> COMP
-    DOCK --> TINI
+    API -->|產生子行程，--token-file| CFD
+    API --- VOL
+    CFD -->|4 條對外連線| EDGE
+    EDGE -->|公開網址| CFD --> ORIG
+    HC -->|/api/health + /ready| API
 ```
+
+**存活偵測。** 容器健康檢查同時要求後端 `/api/health`，**以及**（當隧道已設定時）
+cloudflared `/ready` 至少有一條邊緣連線。連續三次失敗（每 30 秒一次，啟動寬限 60 秒）
+podman 就會殺掉容器（`HealthOnFailure=kill`），`Restart=always` 再把它拉回來，
+應用程式隨即重新接上隧道。從偵測到恢復大約 1.5–2.5 分鐘。
+
+## 環境需求
+
+- Ubuntu 24.04 或同等系統，**rootless podman 4.9.3 以上**（`sudo apt install podman`）
+- 使用者 systemd session 並開啟 linger（`sudo loginctl enable-linger $USER`）
+- Cloudflare 帳號與 tunnel token，或使用介面上的登入流程
+- git，以及約 250 MB 建置映像檔的空間
+
+## 安裝
+
+```bash
+git clone https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui.git
+cd Woow_cloudflare_tunnel_webgui
+
+scripts/install.sh          # 第一次執行：建立 ~/.config/woow-cf-tunnel/woow-cf-tunnel.env
+$EDITOR ~/.config/woow-cf-tunnel/woow-cf-tunnel.env
+scripts/install.sh          # 建置映像檔、安裝單元、啟動並跑冒煙測試
+```
+
+映像檔在**本機建置**，標籤是 `localhost/woow-cf-tunnel:<VERSION>-<git-sha12>`，
+unit 以 `Pull=never` 釘死該標籤（決策 D3）。之後改由 CI 發佈到 GHCR 共用同一份映像檔。
+
+`~/.config/woow-cf-tunnel/woow-cf-tunnel.env` 只放安裝時的設定，沒有任何祕密：
+
+| 設定 | 預設值 | 用途 |
+|---|---|---|
+| `CF_DATA_VOLUME` | `cf_data` | 要沿用或建立的 volume（既有部署沿用原本那個） |
+| `UVICORN_PORT` | `18000` | 介面/API 連接埠；unit 一律綁在 127.0.0.1 |
+| `CF_METRICS_ADDR` | `127.0.0.1:20241` | cloudflared `--metrics`，必須留在 loopback |
+| `AUTH_LISTEN` | `127.0.0.1:8888` | 選配 Basic-auth 代理的監聽位址 |
+| `AUTH_HTPASSWD` | `%h/.config/woow-cf-tunnel/htpasswd` | 其密碼檔 |
+
+這些值在安裝時寫進 unit 檔（決策 D2），容器本身不會讀這個檔案。改完之後，
+執行 `scripts/upgrade.sh`（隧道）或 `scripts/install.sh`（驗證代理）套用。
+
+### 開啟介面
+
+它只監聽 127.0.0.1。在自己的電腦上：
+
+```bash
+ssh -L 18000:127.0.0.1:18000 <這台主機>
+# 然後開啟 http://localhost:18000
+```
+
+接著在 Config 頁貼上 tunnel token（token 模式），或用上線精靈登入 Cloudflare（本地管理模式）。
+
+## 日常操作
+
+```bash
+systemctl --user show woow-cf-tunnel.service -p ActiveState,SubState,NRestarts
+journalctl --user -u woow-cf-tunnel.service -n 50
+podman inspect woow-cf-tunnel -f '{{.State.Health.Status}}'
+curl -s 127.0.0.1:20241/ready            # {"status":200,"readyConnections":4}
+tests/smoke.sh                           # 完整的安裝後檢查
+```
+
+> **如果 SSH 是走這條隧道進來的，重啟會把你自己斷線。** `scripts/install.sh` 永遠不會重啟
+> 執行中的隧道；`scripts/upgrade.sh` 則由背景監看程式執行重啟，失敗會自動回滾。
+> 遠端操作前，一定要先確保有第二條路（tailnet、區域網路或實體主控台）。
+>
+> `migrate-legacy.sh`、`upgrade.sh`、`uninstall.sh`、`restore.sh` 會用
+> `ss -tnpH "sport = :<用戶端埠>"` 查出「是哪個本機行程握著這條 SSH 連線的用戶端那一端」來
+> 判斷你走的是哪條路：tailscaled 以 `--tun=userspace-networking` 執行時同樣會改連
+> 127.0.0.1:22，所以光看來源位址是 loopback 什麼都證明不了，只有載送行程
+> （`cloudflared` 或 `tailscaled`）能分辨。查不出載送行程時，一律當作你走在隧道上並說明
+> 依據；要覆寫請用 `--allow-tunnel-session`（migrate）或 `--force`（uninstall、restore）。
+
+已知行為：當你的 ISP 或邊緣節點連不上時，健康檢查會大約每兩分鐘殺掉並重啟容器一次，
+直到連線恢復。從介面按下停止隧道也會被同樣機制還原——在「隧道就是遠端路徑」的主機上，
+這是刻意的取捨。
+
+## 升級
+
+修改 repo（調整 `VERSION`、釘選的 `CLOUDFLARED_VERSION`、unit 或設定），commit，然後：
+
+```bash
+scripts/upgrade.sh
+```
+
+它會在舊容器持續服務時建置新映像檔，把目前安裝的 unit 存成回滾目標，備份資料 volume，
+記錄基準（邊緣連線數、ingress 設定版本、主機名稱對應表、每個公開網址的 HTTP 回應碼），
+再把重啟交給背景的 `systemd-run --user` 監看程式：安裝 → 重啟 → **180 秒內通過閘門檢查** →
+**觀察 600 秒** → 定案。定案前任何失敗、逾時或訊號，都會重新安裝先前的 unit 並重啟。
+`scripts/upgrade.sh status|commit|abort|--rollback` 可追蹤、提早結束觀察期或還原。
+
+## 備份與還原
+
+```bash
+scripts/backup.sh                      # ~/backups/woow-cf-tunnel/<volume>-<時間>.tar（含 .sha256）
+scripts/restore.sh <tar 檔> [--replace]
+```
+
+> 這個 tar 檔包含 `/data`，**裡面有 tunnel token**。檔案權限 0600、目錄 0700。
+> 請留在本機、定期刪除舊檔，也絕對不要未加密就往外複製：拿到它的人就能接管你的隧道。
+
+## 移除
+
+```bash
+scripts/uninstall.sh            # 停止並移除 unit；保留 volume 與映像檔
+scripts/uninstall.sh --purge    # 先做最後一次備份，再刪掉 volume
+```
+
+## 從既有部署遷移
+
+**從手寫的 systemd unit 或 `podman run`**（例如 `cf-tunnel-webgui.service` 跑
+`podman run ... -v cf_data:/data`）：
+
+```bash
+# 請走「不經過這條隧道」的路徑執行（例如 tailnet）
+scripts/migrate-legacy.sh preflight     # 建置+暫存、檢查、備份、基準 → 印出 RUN
+scripts/migrate-legacy.sh swap          # 背景監看程式，指令立刻返回
+scripts/migrate-legacy.sh status        # 查看階段與結果
+scripts/migrate-legacy.sh commit        # 選用：提早結束 10 分鐘觀察期
+scripts/migrate-legacy.sh --rollback    # 清理前都還可以手動回滾
+```
+
+資料 volume 會原地沿用（`VolumeName=`），token 與設定都不會動。舊 unit 會被停用並
+`disable`，但**檔案保留**；只要新 unit 沒有達到基準，監看程式會自動把它重新啟用。
+中斷時間約 35–50 秒。其他佈局可用這些環境變數：`LEGACY_UNIT`、`LEGACY_GUI_PORT`、
+`EXTRA_UNITS`、`HTTP_OVERRIDES`、`RESCUE_CONTAINER`、`EXPECT_CONNS`。
+
+**從 compose 遷移**：先停掉 compose 專案，把 `CF_DATA_VOLUME` 設成它的 volume
+（通常是 `<專案名>_cf_data`），再執行 `scripts/install.sh`。
+
+**Docker 使用者**：本 repo 只保留 Quadlet（決策 D1）。最後一版含 `docker-compose.yml`
+的 commit 打了 [`compose-final`](../../tree/compose-final) 標籤（`git checkout compose-final`）。
+請注意那份檔案把介面開在 `0.0.0.0:8888` 且沒有任何驗證，對外之前請先讀
+[安全性](#安全性)。
+
+## 安全性
+
+- **這個介面沒有登入機制。** 任何連得到它的人都能讀取 ingress 設定、替換 tunnel token，
+  或停掉隧道。**沒有加上驗證之前，絕對不要把它掛上公開網址或區域網路。**
+  建議順序：
+  1. SSH 埠轉發（預設：unit 綁 127.0.0.1，`tests/smoke.sh` 一旦發現其他位址監聽就會失敗）；
+  2. 在 tunnel 網址前面加上 **Cloudflare Access**；
+  3. 選配的 Basic-auth 代理：`scripts/auth-passwd.sh <使用者>` 之後
+     `scripts/install.sh --with-auth`（nginx 監聽 `AUTH_LISTEN`，安裝時驗證 htpasswd 格式，
+     接受 `$6$`/bcrypt/apr1；unit 以 Assert 檢查檔案存在，不會陷入重啟迴圈）。
+- **tunnel token 是應用程式狀態，不是 repo 裡的祕密。** 它放在資料 volume 的
+  `/data/.tunnel_token`（權限 0600），因為「設定與更換 token」正是這個產品的功能。
+  從 1.1.0 起 cloudflared 以 `--token-file` 讀取，所以**不會出現在任何行程參數裡**：
+  `ps`、`podman top`、`systemctl --user status` 都看不到它。API 一律只回傳 `********`。
+- **repo 與 unit 檔內沒有任何祕密。** `config/woow-cf-tunnel.env.example` 只有設定值，
+  CI 會執行 `tests/no-secrets.sh`。
+- 容器以 rootless 執行，`--cap-drop=all` 且 `no-new-privileges`。metrics 位址必須留在
+  127.0.0.1：在 host 網路模式下，`0.0.0.0` 會把整份 ingress 對應表公開給區域網路
+  （install.sh 會拒絕）。
+- 備份檔含有 token（見上）。
 
 ## 專案結構
 
 ```
-Woow_cloudflare_tunnel_webgui/
-├── backend/
-│   ├── main.py                    # FastAPI 應用入口 + CSRF 中介軟體
-│   ├── requirements.txt           # Python 依賴套件
-│   ├── models/
-│   │   └── schemas.py             # Pydantic 模型 + 驗證器
-│   ├── routers/
-│   │   ├── config.py              # GET/PUT /api/config
-│   │   ├── health.py              # GET /api/health
-│   │   ├── logs.py                # WebSocket /api/logs/stream
-│   │   └── tunnel.py              # POST /api/tunnel/{start,stop,restart,status}
-│   └── services/
-│       ├── config_manager.py      # JSON 設定持久化 + 合併邏輯
-│       ├── podman_manager.py      # Podman SDK 封裝
-│       └── validator.py           # 映像白名單 + 注入防護
-├── frontend/
-│   ├── package.json               # Node.js 依賴套件
-│   ├── vite.config.ts             # Vite 建置設定
-│   ├── tailwind.config.js         # Tailwind CSS 設定
-│   └── src/
-│       ├── App.vue                # 根元件
-│       ├── router.ts              # Vue Router 設定
-│       ├── components/            # NavBar, StatusCard, LogViewer 等
-│       ├── composables/           # useCsrf, useWebSocket
-│       ├── pages/                 # Dashboard, Config, Logs
-│       ├── stores/                # Pinia 狀態管理（config, tunnel）
-│       └── types/                 # TypeScript 型別定義
-├── tests/
-│   ├── conftest.py                # 共用 fixtures + CSRF 處理
-│   ├── test_schemas.py            # 60 項測試 — Pydantic 模型驗證
-│   ├── test_config_manager.py     # 9 項測試 — 設定持久化
-│   ├── test_config_api.py         # 25 項測試 — API 整合測試
-│   ├── test_validator.py          # 25 項測試 — 安全性驗證器測試
-│   └── test_e2e_live.py           # 21 項測試 — 即時容器 E2E 測試
-├── docs/
-│   └── screenshots/               # UI 截圖文檔
-├── config/                        # 執行時設定（機敏資料已 gitignore）
-├── Dockerfile                     # 多階段建置（Node + Python）
-├── docker-compose.yml             # 生產環境部署
-├── pytest.ini                     # 測試設定
-├── README.md                      # 英文文檔
-└── README_zh-TW.md                # 繁體中文文檔
+quadlet/          woow-cf-tunnel.container、woow-cf-tunnel-data.volume、render-vars
+quadlet/optional/ woow-cf-tunnel-auth.container（Basic-auth 代理）
+config/           woow-cf-tunnel.env.example、auth/auth-nginx.conf
+scripts/          install、upgrade、uninstall、backup、restore、migrate-legacy、
+                  auth-passwd、healthcheck.py、render-args.sh、lib/
+backend/          FastAPI：routers/{config,tunnel,logs,health,setup}、
+                  services/{process_manager,cloudflared_cli,token_store,config_builder,
+                  config_manager,instances,validator}
+frontend/         Vue 3 + Vite SPA
+tests/            dryrun.sh（含 dryrun.local.sh）、smoke.sh、harness/、pytest 測試
 ```
 
-## 截圖展示
+`scripts/lib/quadlet-lib.sh` 是 WOOWTECH 共用的 Quadlet 函式庫，原封不動 vendored 進來，
+CI 會比對雜湊（決策 D8）。請勿在這裡修改它。
 
-### 儀表板 — 隧道狀態與控制
+## 測試
+
+```bash
+tests/dryrun.sh            # 套值 + podman 4.9.3 產生器 + systemd-analyze + 不變條件
+tests/harness/run-all.sh   # 以模擬的 podman/systemd 跑 install/migrate/upgrade/uninstall
+python -m pytest -m "not e2e" -q
+tests/smoke.sh             # 針對實際安裝
+```
+
+除了 CI 的端對端工作，沒有任何測試會建立容器；那個工作同時驗證存活鏈
+（假 token → 不健康 → `HealthOnFailure=kill` → `Restart=always`）。
+
+## API 參考
+
+| 端點 | 回傳 |
+|---|---|
+| `GET /api/health` | `{"status":"ok","process_running":true}` |
+| `GET /api/config` | `TunnelConfigRead`：`mode`、`tunnel_name`、`routes[]`、`catch_all_service`、`post_quantum`、`log_level`、`run_parameters`、`no_tls_verify`、`tunnel_token_masked` |
+| `PUT /api/config` | 同樣結構；`tunnel_token` 只能寫入，存到 `/data/.tunnel_token` |
+| `POST /api/tunnel/{start,stop,restart}`、`GET /api/tunnel/status` | 連接器控制 |
+| `GET /api/setup/state`、`POST /api/setup/*`、`WS /api/setup/login` | 本地管理上線精靈（token 模式會拒絕） |
+| `WS /ws/logs` | cloudflared 即時輸出 |
+
+會改變狀態的請求需要 CSRF double-submit cookie（`x-csrftoken`）。
+
+## 截圖
 
 <p align="center">
   <img src="docs/screenshots/dashboard.png" alt="儀表板" width="720">
 </p>
-
-即時監控隧道狀態、Podman 連線與 Token 設定。一鍵 啟動/停止/重啟 `cloudflared` 容器。
-
-### 設定 — 基本設定
-
 <p align="center">
-  <img src="docs/screenshots/config_basic.png" alt="基本設定" width="720">
+  <img src="docs/screenshots/config_basic.png" alt="設定" width="720">
 </p>
-
-隧道 Token（以 Podman secret 儲存，永不寫入磁碟）、外部主機名稱、隧道名稱、容器名稱，以及具白名單驗證的容器映像設定。
-
-### 設定 — 額外主機與 Catch-All
-
-<p align="center">
-  <img src="docs/screenshots/config_additional_hosts.png" alt="額外主機設定" width="720">
-</p>
-
-動態主機名稱到服務的路由對應，每個主機可個別設定分塊傳輸編碼。Catch-All 服務支援 Nginx Proxy Manager 整合 — 啟用 NPM 時，服務 URL 欄位自動鎖定為 `http://localhost:80`。
-
-### 設定 — 進階設定
-
-<p align="center">
-  <img src="docs/screenshots/config_advanced.png" alt="進階設定" width="720">
-</p>
-
-後量子密碼學開關、8 級日誌詳細程度下拉選單（trace/debug/info/notice/warn/warning/error/fatal），以及額外 CLI 參數供進階 `cloudflared` 旗標使用。
-
-### 日誌 — 即時串流
-
 <p align="center">
   <img src="docs/screenshots/logs.png" alt="日誌" width="720">
 </p>
 
-基於 WebSocket 的即時日誌檢視器，支援篩選搜尋、自動捲動、清除與下載功能。色彩標示日誌等級，方便快速視覺掃描。
-
-## 安裝
-
-### 前置需求
-
-- **Docker** 或 **Podman** 已安裝並運行
-- **Cloudflare 帳號**（[免費註冊](https://dash.cloudflare.com/sign-up)）
-
-`cloudflared` 二進位已內建於映像中，因此**不需另外安裝、也不需掛載 Podman/Docker socket**，全部在單一容器內運行。
-
-### 使用 Docker Compose 快速啟動
-
-```bash
-# 1. 複製倉庫
-git clone https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui.git
-cd Woow_cloudflare_tunnel_webgui
-
-# 2. 建置並啟動（主機 8888 → 容器 8000）
-docker compose up -d --build   # 或：podman compose up -d --build
-
-# 3. 開啟 GUI
-open http://localhost:8888
-```
-
-### 手動建置與執行
-
-映像為單容器,在 Docker 與 Podman 上指令完全相同,僅二進位名稱不同：
-
-```bash
-# 建置
-docker build -t cf-webui:latest .          # 或：podman build -t cf-webui:latest .
-
-# 執行 — 主機 8888 對應容器 8000,狀態持久化於 /data volume
-docker run -d \
-  --name cf-tunnel-webgui \
-  -p 8888:8000 \
-  -v cf_data:/data \
-  -e CSRF_SECRET=$(openssl rand -hex 32) \
-  cf-webui:latest
-# Podman：將 `docker` 換成 `podman` 即可,其餘相同。
-```
-
-`/data` 存放隧道憑證、路由設定與本地 cloudflared 狀態 —— 請以 named volume 保存,確保容器重建後資料不遺失。
-
-### 運行模式
-
-| 模式 | 使用時機 | 你需要提供 |
-|------|----------|------------|
-| **本地管理（Local-managed）** | 想讓 GUI 幫你建立並運行隧道 | 於 GUI 內登入 Cloudflare（自助流程,見下） |
-| **Token** | 你已從 Cloudflare 儀表板取得隧道 Token | 在設定頁貼上隧道 Token |
-
-#### Cloudflare 登入（本地管理模式的自助流程）
-
-1. 在 GUI 開始登入流程 —— 畫面會顯示一組 Cloudflare 網址/代碼。
-2. 用瀏覽器開啟該網址,登入並授權對應 zone。
-3. 憑證會寫入 `/data`,GUI 隨即為你建立並啟動隧道。
-
-> **刪除路由不會移除其 DNS 紀錄。** 在 GUI 刪除某個主機名稱/路由後,對應的 CNAME 仍會留在你的 Cloudflare DNS 中。請至 Cloudflare 儀表板手動刪除,才能完全停用該主機名稱。
-
-### 環境變數
-
-| 變數 | 預設值 | 說明 |
-|------|--------|------|
-| `CSRF_SECRET` | 自動產生 | CSRF Token 簽名用金鑰 |
-
-## 設定指南
-
-### 首次設定
-
-1. 在瀏覽器開啟 `http://localhost:8888`
-2. 導航至**設定 (Config)** 頁面
-3. 輸入你的 **Cloudflare Tunnel Token**（以 Podman secret 儲存）
-4. 設定容器名稱與映像
-5. 點擊 **Save & Restart** 啟動隧道
-
-### 額外主機設定
-
-透過單一隧道路由多個主機名稱：
-
-1. 在「額外主機」區塊點擊 **+ Add Host**
-2. 輸入主機名稱（例如 `app.example.com`）
-3. 輸入後端服務 URL（例如 `http://localhost:3000`）
-4. 可選擇開啟 **Disable chunked transfer encoding**
-5. 重複以上步驟新增更多主機，然後點擊 **Save**
-
-### Nginx Proxy Manager 整合
-
-如果你使用 Nginx Proxy Manager：
-
-1. 在「Catch-All 服務」區塊啟用 **Nginx Proxy Manager** 開關
-2. Catch-All 服務 URL 自動設定為 `http://localhost:80`
-3. NPM 負責 SSL 終止與反向代理
-
-## 安全性
-
-### 防禦層級
-
-```
-┌─────────────────────────────────────────────────┐
-│                 CSRF 防護                        │
-│          雙重提交 Cookie 模式                     │
-├─────────────────────────────────────────────────┤
-│               輸入驗證                           │
-│    Pydantic field_validator + 正則表達式           │
-├─────────────────────────────────────────────────┤
-│              映像白名單                          │
-│   僅允許 cloudflare/cloudflared 映像              │
-├─────────────────────────────────────────────────┤
-│             注入防護                             │
-│  阻擋 Shell 特殊字元：; & | ` $() (){}            │
-├─────────────────────────────────────────────────┤
-│             Token 安全                           │
-│   以 Podman secret 儲存，永不寫入磁碟              │
-│   API 回應僅回傳遮罩值                            │
-└─────────────────────────────────────────────────┘
-```
-
-| 攻擊向量 | 防護機制 |
-|----------|----------|
-| CSRF | 雙重提交 Cookie + `SameSite=Lax` |
-| Shell 注入（extra_args） | 正則阻擋 `;`、`&`、`|`、`` ` ``、`$()`、`(){}` |
-| 惡意容器映像 | 白名單：僅允許 `docker.io` 的 `cloudflare/cloudflared` |
-| 容器名稱注入 | Docker 相容名稱正則：`[a-zA-Z0-9][a-zA-Z0-9_.-]*` |
-| Token 洩漏 | 以 Podman secret 儲存；API 回傳 `********` |
-| XSS | Vue 3 自動跳脫 + Content Security Policy |
-
-## API 參考
-
-### 健康檢查
-
-```http
-GET /api/health
-```
-
-```json
-{
-  "status": "ok",
-  "podman_connected": true,
-  "tunnel_status": "running"
-}
-```
-
-### 取得設定
-
-```http
-GET /api/config
-```
-
-```json
-{
-  "tunnel_token_secret": "cf-tunnel-token",
-  "tunnel_token_masked": "********",
-  "post_quantum": false,
-  "log_level": "info",
-  "extra_args": "",
-  "container_name": "cloudflared",
-  "container_image": "cloudflare/cloudflared:latest",
-  "external_hostname": "",
-  "additional_hosts": [],
-  "tunnel_name": "",
-  "catch_all_service": "",
-  "nginx_proxy_manager": false
-}
-```
-
-### 更新設定
-
-```http
-PUT /api/config
-Content-Type: application/json
-X-CSRFToken: <token>
-
-{
-  "container_image": "cloudflare/cloudflared:latest",
-  "container_name": "cloudflared",
-  "log_level": "debug",
-  "external_hostname": "home.example.com",
-  "additional_hosts": [
-    {
-      "hostname": "app.example.com",
-      "service": "http://localhost:3000",
-      "disableChunkedEncoding": false
-    }
-  ],
-  "nginx_proxy_manager": true
-}
-```
-
-### 隧道控制
-
-```http
-POST /api/tunnel/start
-POST /api/tunnel/stop
-POST /api/tunnel/restart
-GET  /api/tunnel/status
-```
-
-### 日誌串流
-
-```javascript
-const ws = new WebSocket('ws://localhost:8888/api/logs/stream');
-ws.onmessage = (event) => console.log(event.data);
-```
-
-## 測試
-
-### 測試套件概覽
-
-| 測試檔案 | 測試數 | 涵蓋範圍 |
-|----------|--------|----------|
-| `test_schemas.py` | 60 | Pydantic 模型、LogLevel 列舉、AdditionalHost、注入防護 |
-| `test_config_api.py` | 25 | Config API GET/PUT、CSRF、錯誤碼 400/422 |
-| `test_validator.py` | 25 | 映像白名單、Token 格式、Shell 注入（6 種向量） |
-| `test_config_manager.py` | 9 | 設定持久化、合併邏輯、遷移 |
-| `test_e2e_live.py` | 21 | 針對即時容器的端對端測試 |
-| **合計** | **140** | **100% 通過率** |
-
-### 執行測試
-
-```bash
-# 全部測試（unit + integration + E2E）
-python3 -m pytest tests/ -v
-
-# 僅 unit/integration（不需要容器）
-python3 -m pytest tests/ -m "not e2e" -v
-
-# 僅 E2E（需要容器運行於 localhost:8888）
-python3 -m pytest tests/ -m e2e -v
-```
-
-### 安全性測試涵蓋
-
-- 6 種 Shell 注入攻擊向量已阻擋
-- 8 種惡意映像名稱已拒絕
-- 6 種 Token 注入模式已阻擋
-- 7 種無效容器名稱格式已拒絕
-- CSRF 繞過嘗試已阻擋
-
-## 技術堆疊
-
-### 後端
-
-| 套件 | 版本 | 用途 |
-|------|------|------|
-| FastAPI | 0.115.6 | 非同步 REST API 框架 |
-| Uvicorn | 0.34.0 | ASGI 伺服器 |
-| Pydantic | 2.10.4 | 資料驗證與序列化 |
-| Podman SDK | 5.2+ | 透過 Podman API 管理容器 |
-| Starlette-CSRF | 3.0.0 | CSRF 防護中介軟體 |
-| WebSockets | 14.2 | 即時日誌串流 |
-| Aiofiles | 24.1.0 | 非同步檔案操作 |
-
-### 前端
-
-| 套件 | 版本 | 用途 |
-|------|------|------|
-| Vue | 3.5.13 | 響應式 UI 框架 |
-| Vue Router | 4.5.0 | 客戶端路由 |
-| Pinia | 2.3.0 | 狀態管理 |
-| TypeScript | 5.7.3 | 型別安全 JavaScript |
-| Vite | 6.0.7 | 建置工具與開發伺服器 |
-| Tailwind CSS | 3.4.17 | 工具優先 CSS 框架 |
-| Heroicons | 2.2.0 | SVG 圖示庫 |
-
-### 基礎設施
-
-| 元件 | 用途 |
-|------|------|
-| 多階段 Dockerfile | Node.js 建置 + Python 運行時 |
-| Docker Compose 3.8 | 生產環境部署 |
-| Tini | PID 1 初始化系統，正確處理信號 |
-| Podman Socket | Rootless 容器管理 |
-
-## 變更日誌
-
-### v1.0.0 (2026-04-11)
-
-**新功能**
-- 完整 HAOS Cloudflared add-on 參數相容性
-- 額外主機動態路由，支援分塊傳輸編碼開關
-- Catch-All 服務，支援 Nginx Proxy Manager 整合
-- 後量子密碼學開關
-- 8 級日誌詳細程度（trace/debug/info/notice/warn/warning/error/fatal）
-- 隧道名稱與外部主機名稱設定
-
-**安全性**
-- CSRF 雙重提交 Cookie 防護
-- Shell 注入防護（6 種攻擊向量）
-- 容器映像白名單驗證
-- Token 以 Podman secret 儲存，永不寫入磁碟
-
-**測試**
-- 140 項自動化測試（100% 通過率）
-- 單元、整合與端對端測試涵蓋
-- 安全性攻擊向量驗證
-
 ## 支援
 
-- **Issues**: [GitHub Issues](https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui/issues)
-- **Email**: support@woowtech.io
-- **Demo**: 透過 Cloudflare Tunnel 部署
+- 問題回報：[GitHub Issues](https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui/issues)
+- 變更紀錄：[CHANGELOG.md](CHANGELOG.md)
 
 ## 授權
 
-本專案採用 MIT 授權條款。
+MIT。
 
 ---
 
 <p align="center">
-  以 Vue 3 + FastAPI + Podman 建置，由 <a href="https://github.com/WOOWTECH">WOOWTECH</a> 開發
+  由 <a href="https://github.com/WOOWTECH">WOOWTECH</a> 以 Vue 3 + FastAPI + Podman Quadlet 打造
 </p>

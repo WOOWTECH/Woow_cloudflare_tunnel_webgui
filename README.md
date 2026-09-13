@@ -2,27 +2,28 @@
   <img src="frontend/public/favicon.svg" alt="CF Tunnel Logo" width="80">
 </p>
 
-<h1 align="center">Cloudflare Tunnel Web GUI for Podman</h1>
+<h1 align="center">Cloudflare Tunnel Web GUI</h1>
 
 <p align="center">
-  <strong>A modern web interface to manage Cloudflare Tunnel containers via Podman — fully compatible with Home Assistant OS (HAOS) Cloudflared add-on parameters.</strong>
+  <strong>Run and manage a Cloudflare Tunnel from a browser. One container, supervised by systemd through Podman Quadlet.</strong>
 </p>
 
 <p align="center">
   <a href="README_zh-TW.md">繁體中文</a> &bull;
-  <a href="#screenshots">Screenshots</a> &bull;
-  <a href="#installation">Installation</a> &bull;
-  <a href="#architecture">Architecture</a> &bull;
-  <a href="#api-reference">API Reference</a>
+  <a href="#install">Install</a> &bull;
+  <a href="#operate">Operate</a> &bull;
+  <a href="#security">Security</a> &bull;
+  <a href="#migrating-an-existing-deployment">Migrate</a> &bull;
+  <a href="#api-reference">API</a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/Vue-3.5-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
+  <img src="https://img.shields.io/badge/Podman-4.9%2B%20(Quadlet)-892CA0?logo=podman&logoColor=white" alt="Podman">
+  <img src="https://img.shields.io/badge/systemd-user%20units-informational" alt="systemd">
+  <img src="https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Podman-5.2+-892CA0?logo=podman&logoColor=white" alt="Podman">
-  <img src="https://img.shields.io/badge/Cloudflare-Tunnel-F38020?logo=cloudflare&logoColor=white" alt="Cloudflare">
-  <img src="https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Vue-3.5-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
+  <img src="https://img.shields.io/badge/cloudflared-2026.6.1-F38020?logo=cloudflare&logoColor=white" alt="cloudflared">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
 </p>
 
@@ -30,574 +31,268 @@
 
 ## Overview
 
-This project provides a **containerized web GUI** for managing [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) (`cloudflared`) through [Podman](https://podman.io/). It replaces manual CLI operations with a clean browser-based interface for tunnel configuration, container lifecycle management, and real-time log streaming.
+A single container runs a FastAPI + Vue web GUI **and the `cloudflared` connector it
+supervises as a child process**. You paste a tunnel token (or log in to Cloudflare from the
+GUI), and the tunnel runs. There is no Podman socket, no second container, and no CLI.
 
-### Why This Project?
-
-| Challenge | Solution |
-|-----------|----------|
-| Managing `cloudflared` requires CLI expertise | Web GUI with intuitive forms and toggles |
-| Configuration scattered across CLI flags | Centralized config page with validation |
-| No visibility into tunnel health | Real-time dashboard with status cards |
-| Log inspection requires `podman logs` | Live WebSocket log streaming with filters |
-| HAOS Cloudflared add-on parameters not available | Full HAOS parameter compatibility |
-| Security risks from manual token handling | Token stored as Podman secret, never written to disk |
-
-## Features
-
-### Dashboard
-- Real-time tunnel status monitoring (running / stopped / error)
-- Podman connection health check
-- Token configuration status
-- One-click Start / Stop / Restart controls
-
-### Configuration
-- **Basic Settings** — Tunnel token (masked), external hostname, tunnel name, container name, container image (whitelist-validated)
-- **Additional Hosts** — Dynamic add/remove of hostname-to-service route mappings with chunked encoding toggle
-- **Catch-All Service** — Fallback service URL with Nginx Proxy Manager integration toggle
-- **Advanced Settings** — Post-quantum cryptography, 8-level log verbosity, extra CLI arguments
-- **Security** — Shell injection prevention, image whitelist, CSRF double-submit cookie protection
-
-### Logs
-- Real-time WebSocket-based log streaming
-- Filter/search with text highlighting
-- Auto-scroll with manual override
-- Log download and clear controls
-- Connection status indicator
-
-### HAOS Compatibility
-
-All configuration parameters from the [Home Assistant OS Cloudflared add-on](https://github.com/brenner-tobias/addon-cloudflared) are supported:
-
-| HAOS Parameter | GUI Field | Status |
-|----------------|-----------|--------|
-| `external_hostname` | External Hostname | Supported |
-| `additional_hosts` | Additional Hosts (dynamic list) | Supported |
-| `tunnel_name` | Tunnel Name | Supported |
-| `catch_all_service` | Catch-All Service URL | Supported |
-| `nginx_proxy_manager` | Nginx Proxy Manager toggle | Supported |
-| `post_quantum` | Post-Quantum Crypto toggle | Supported |
-| `log_level` | Log Level dropdown (8 levels) | Supported |
-
-## Architecture
-
-### System Architecture
-
-```mermaid
-graph TB
-    subgraph Browser["Browser"]
-        UI["Vue 3 SPA<br/>Dashboard | Config | Logs"]
-    end
-
-    subgraph Container["cf-tunnel-gui Container"]
-        subgraph Backend["FastAPI Backend :8000"]
-            API["REST API<br/>/api/health<br/>/api/config<br/>/api/tunnel"]
-            WS["WebSocket<br/>/api/logs/stream"]
-            CSRF["CSRF Middleware<br/>Double Submit Cookie"]
-            CM["ConfigManager<br/>settings.json"]
-            PM["PodmanManager<br/>Container Lifecycle"]
-            VAL["Validator<br/>Image Whitelist<br/>Injection Prevention"]
-        end
-        STATIC["Static Files<br/>Vue Build Output"]
-    end
-
-    subgraph Host["Host System"]
-        SOCK["Podman Socket<br/>/run/podman/podman.sock"]
-        CF["cloudflared Container<br/>Cloudflare Tunnel"]
-    end
-
-    subgraph Cloud["Cloudflare Edge"]
-        EDGE["Cloudflare Network<br/>DNS + Tunnel Routing"]
-    end
-
-    UI -->|"HTTP/REST"| API
-    UI -->|"WebSocket"| WS
-    API --> CSRF
-    CSRF --> CM
-    CSRF --> PM
-    CSRF --> VAL
-    PM -->|"Podman API"| SOCK
-    SOCK -->|"Container Mgmt"| CF
-    CF -->|"Encrypted Tunnel"| EDGE
-    WS -->|"Log Stream"| SOCK
-    Browser -->|"HTTPS"| EDGE
-    EDGE -->|"Tunnel"| CF
-```
-
-### Request Flow
-
-```mermaid
-sequenceDiagram
-    participant B as Browser
-    participant F as FastAPI
-    participant C as CSRF Middleware
-    participant V as Validator
-    participant CM as ConfigManager
-    participant P as PodmanManager
-    participant CF as cloudflared
-
-    B->>F: GET /api/config
-    F->>C: Validate CSRF cookie
-    C->>CM: Load config
-    CM-->>F: Config (token masked)
-    F-->>B: JSON response
-
-    B->>F: PUT /api/config
-    F->>C: Validate CSRF cookie + header
-    C->>V: Validate image, container name, args
-    V-->>C: Validation result
-    C->>CM: Save config
-    CM-->>F: Updated config
-    F-->>B: 200 OK
-
-    B->>F: POST /api/tunnel/restart
-    F->>P: Restart container
-    P->>CF: podman restart cloudflared
-    CF-->>P: Container restarted
-    P-->>F: New status
-    F-->>B: Container status
-```
-
-### Tech Stack
+`scripts/install.sh` installs it as **rootless Podman Quadlet units under user systemd**, so
+it starts at boot (with linger), restarts when it crashes, and — new in 1.1.0 — restarts
+when the *tunnel* dies while the backend is still up.
 
 ```mermaid
 graph LR
-    subgraph Frontend
-        VUE["Vue 3.5"]
-        TS["TypeScript 5.7"]
-        VITE["Vite 6"]
-        TW["Tailwind CSS 3.4"]
-        PINIA["Pinia 2.3"]
-        ROUTER["Vue Router 4.5"]
+    subgraph U["woow-cf-tunnel.service (systemd --user, Quadlet)"]
+        subgraph C["container woow-cf-tunnel (network=host)"]
+            API["FastAPI + Vue GUI<br/>127.0.0.1:18000"]
+            CFD["cloudflared child<br/>metrics 127.0.0.1:20241"]
+            HC["/usr/local/bin/cf-webui-healthcheck"]
+        end
+        VOL[("volume /data<br/>settings.json<br/>.tunnel_token 0600<br/>.csrf_secret")]
     end
+    EDGE["Cloudflare edge"]
+    ORIG["origins on this host<br/>localhost:22, :8123, ..."]
 
-    subgraph Backend
-        FAPI["FastAPI 0.115"]
-        UV["Uvicorn 0.34"]
-        PYD["Pydantic 2.10"]
-        POD["Podman SDK 5.2"]
-        SCRRF["Starlette-CSRF 3.0"]
-        WSOCK["WebSockets 14.2"]
-    end
-
-    subgraph Infrastructure
-        DOCK["Multi-stage Dockerfile"]
-        COMP["Docker Compose 3.8"]
-        TINI["Tini (PID 1)"]
-    end
-
-    VUE --> TS
-    TS --> VITE
-    VUE --> TW
-    VUE --> PINIA
-    VUE --> ROUTER
-
-    FAPI --> UV
-    FAPI --> PYD
-    FAPI --> POD
-    FAPI --> SCRRF
-    FAPI --> WSOCK
-
-    DOCK --> COMP
-    DOCK --> TINI
+    API -->|spawns, --token-file| CFD
+    API --- VOL
+    CFD -->|4 outbound connections| EDGE
+    EDGE -->|public hostnames| CFD --> ORIG
+    HC -->|/api/health + /ready| API
 ```
 
-## Project Structure
+**Liveness.** The container healthcheck requires the backend's `/api/health` **and**, when a
+tunnel is configured, `cloudflared`'s `/ready` with at least one edge connection. Three
+failures in a row (30s apart, after a 60s start period) make podman kill the container
+(`HealthOnFailure=kill`); `Restart=always` brings it back and the app reconnects the tunnel.
+Detection to recovery is roughly 1.5-2.5 minutes.
+
+## Requirements
+
+- Ubuntu 24.04 or similar, **rootless podman 4.9.3+** (`sudo apt install podman`)
+- a user systemd session with linger (`sudo loginctl enable-linger $USER`)
+- a Cloudflare account and a tunnel token, or the GUI login flow
+- git, and enough space to build the image (~250 MB)
+
+## Install
+
+```bash
+git clone https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui.git
+cd Woow_cloudflare_tunnel_webgui
+
+scripts/install.sh          # first run: writes ~/.config/woow-cf-tunnel/woow-cf-tunnel.env
+$EDITOR ~/.config/woow-cf-tunnel/woow-cf-tunnel.env
+scripts/install.sh          # builds the image, installs the units, starts, smoke-tests
+```
+
+The image is **built locally** from this checkout and tagged
+`localhost/woow-cf-tunnel:<VERSION>-<git-sha12>`; the unit pins that tag with `Pull=never`
+(decision D3). Publishing to GHCR so hosts share one build is future work.
+
+`~/.config/woow-cf-tunnel/woow-cf-tunnel.env` holds install-time settings only, no secrets:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `CF_DATA_VOLUME` | `cf_data` | the volume to adopt or create (existing deployments keep theirs) |
+| `UVICORN_PORT` | `18000` | GUI/API port; the unit always binds it to 127.0.0.1 |
+| `CF_METRICS_ADDR` | `127.0.0.1:20241` | cloudflared `--metrics`; must stay on loopback |
+| `AUTH_LISTEN` | `127.0.0.1:8888` | optional Basic-auth proxy listen address |
+| `AUTH_HTPASSWD` | `%h/.config/woow-cf-tunnel/htpasswd` | its password file |
+
+Values are rendered into the unit files at install time (decision D2); the containers never
+read this file. After editing it, run `scripts/upgrade.sh` (tunnel) or `scripts/install.sh`
+(auth proxy).
+
+### Open the GUI
+
+It listens on 127.0.0.1 only. From your workstation:
+
+```bash
+ssh -L 18000:127.0.0.1:18000 <this host>
+# then open http://localhost:18000
+```
+
+Then use the Config page to paste your tunnel token (token mode), or the Setup wizard to log
+in to Cloudflare (local-managed mode).
+
+## Operate
+
+```bash
+systemctl --user show woow-cf-tunnel.service -p ActiveState,SubState,NRestarts
+journalctl --user -u woow-cf-tunnel.service -n 50
+podman inspect woow-cf-tunnel -f '{{.State.Health.Status}}'
+curl -s 127.0.0.1:20241/ready            # {"status":200,"readyConnections":4}
+tests/smoke.sh                           # the full post-install check list
+```
+
+> **If this tunnel carries your SSH session, a restart drops it.** `scripts/install.sh`
+> never restarts a running tunnel; `scripts/upgrade.sh` does the restart from a detached
+> watchdog that rolls back on its own. Always keep a second way in (a tailnet, the LAN, a
+> console) before touching it remotely.
+>
+> `migrate-legacy.sh`, `upgrade.sh`, `uninstall.sh` and `restore.sh` work out which path you
+> are on by asking who holds the local end of your SSH connection
+> (`ss -tnpH "sport = :<client port>"`): with `--tun=userspace-networking` tailscaled also
+> re-dials 127.0.0.1:22, so a loopback client address proves nothing on its own — only the
+> carrier process (`cloudflared` vs `tailscaled`) does. When the carrier cannot be identified
+> they assume you are on the tunnel and say what they saw; `--allow-tunnel-session`
+> (migrate) and `--force` (uninstall, restore) override.
+
+Known behaviour: while your ISP or the edge is unreachable, the healthcheck keeps killing
+and restarting the container about every two minutes until connectivity returns. Stopping
+the tunnel from the GUI is undone the same way — on hosts where the tunnel is the remote
+path, that is the intended bias.
+
+## Upgrade
+
+Change the repo (bump `VERSION`, the pinned `CLOUDFLARED_VERSION`, a unit or a setting),
+commit, then:
+
+```bash
+scripts/upgrade.sh
+```
+
+It builds the new image while the old container keeps serving, snapshots the installed units
+as the rollback target, backs up the data volume, records a baseline (edge connections,
+ingress config version, hostname map, every public hostname's HTTP code), then hands the
+restart to a detached `systemd-run --user` watchdog: install, restart, **gate within 180s**,
+**soak 600s**, commit. Any failure, timeout or signal before the commit reinstalls the
+previous units and restarts them. `scripts/upgrade.sh status|commit|abort|--rollback`
+follow, end the soak early, or undo it.
+
+## Backup and restore
+
+```bash
+scripts/backup.sh                      # ~/backups/woow-cf-tunnel/<volume>-<ts>.tar (+ .sha256)
+scripts/restore.sh <tarball> [--replace]
+```
+
+> The tarball contains `/data`, **including the tunnel token**. It is written mode 0600 in a
+> 0700 directory. Keep it on the host, delete old copies, and never copy it anywhere
+> unencrypted: anyone who holds it can run your tunnel.
+
+## Uninstall
+
+```bash
+scripts/uninstall.sh            # stops and removes the units; keeps the volume and images
+scripts/uninstall.sh --purge    # also deletes the volume, after a final backup
+```
+
+## Migrating an existing deployment
+
+**From a hand-written systemd unit or `podman run`** (for example a `cf-tunnel-webgui.service`
+running `podman run ... -v cf_data:/data`):
+
+```bash
+# run this over a path that does NOT go through the tunnel (for example a tailnet)
+scripts/migrate-legacy.sh preflight     # build + stage, checks, backup, baseline -> prints RUN
+scripts/migrate-legacy.sh swap          # detached watchdog; returns immediately
+scripts/migrate-legacy.sh status        # phase and result
+scripts/migrate-legacy.sh commit        # optional: end the 10-minute soak early
+scripts/migrate-legacy.sh --rollback    # manual rollback, until you clean up
+```
+
+The data volume is adopted in place (`VolumeName=`), so the token and settings survive. The
+legacy unit is stopped and disabled but **its file is kept**, and the watchdog re-enables it
+automatically if the new unit does not reach the baseline. Outage: roughly 35-50 seconds.
+Knobs for other layouts: `LEGACY_UNIT`, `LEGACY_GUI_PORT`, `EXTRA_UNITS`, `HTTP_OVERRIDES`,
+`RESCUE_CONTAINER`, `EXPECT_CONNS`.
+
+**From compose:** stop the compose project, set `CF_DATA_VOLUME` to its volume (usually
+`<project>_cf_data`), then run `scripts/install.sh`.
+
+**Docker users:** this repo is Quadlet-only (decision D1). The last commit that ships
+`docker-compose.yml` is tagged [`compose-final`](../../tree/compose-final)
+(`git checkout compose-final`). Note that file published the GUI on `0.0.0.0:8888` with no
+authentication — read [Security](#security) before you expose it.
+
+## Security
+
+- **The GUI has no login.** Anyone who reaches it can read your ingress configuration,
+  replace the tunnel token, or stop the tunnel. **Never put it on a public hostname or the
+  LAN without authentication in front.** In order of preference:
+  1. an SSH port-forward (the default: the unit binds 127.0.0.1 and `tests/smoke.sh` fails
+     if anything else listens on that port);
+  2. **Cloudflare Access** on a tunnel hostname;
+  3. the optional Basic-auth proxy: `scripts/auth-passwd.sh <user>` then
+     `scripts/install.sh --with-auth` (nginx on `AUTH_LISTEN`, htpasswd validated at install,
+     `$6$`/bcrypt/apr1 hashes, the unit asserts its files exist instead of crash-looping).
+- **The tunnel token is app state, not a repo secret.** It lives in the data volume at
+  `/data/.tunnel_token` (mode 0600) because the GUI's job is to set and replace it. Since
+  1.1.0 cloudflared reads it with `--token-file`, so it is **not** in any process argv:
+  `ps`, `podman top` and `systemctl --user status` no longer expose it. API responses only
+  ever return `********`.
+- **No secrets in the repo or in unit files.** `config/woow-cf-tunnel.env.example` holds
+  settings only; `tests/no-secrets.sh` runs in CI.
+- The container runs rootless with `--cap-drop=all` and `no-new-privileges`. The metrics
+  endpoint must stay on 127.0.0.1: with host networking, `0.0.0.0` would publish the whole
+  ingress map to the LAN (install.sh refuses it).
+- Backups contain the token (see above).
+
+## Repository layout
 
 ```
-Woow_cloudflare_tunnel_webgui/
-├── backend/
-│   ├── main.py                    # FastAPI app entry + CSRF middleware
-│   ├── requirements.txt           # Python dependencies
-│   ├── models/
-│   │   └── schemas.py             # Pydantic models + validators
-│   ├── routers/
-│   │   ├── config.py              # GET/PUT /api/config
-│   │   ├── health.py              # GET /api/health
-│   │   ├── logs.py                # WebSocket /api/logs/stream
-│   │   └── tunnel.py              # POST /api/tunnel/{start,stop,restart,status}
-│   └── services/
-│       ├── config_manager.py      # JSON config persistence + merge logic
-│       ├── podman_manager.py      # Podman SDK wrapper
-│       └── validator.py           # Image whitelist + injection prevention
-├── frontend/
-│   ├── package.json               # Node.js dependencies
-│   ├── vite.config.ts             # Vite build config
-│   ├── tailwind.config.js         # Tailwind CSS config
-│   └── src/
-│       ├── App.vue                # Root component
-│       ├── router.ts              # Vue Router config
-│       ├── components/            # NavBar, StatusCard, LogViewer, etc.
-│       ├── composables/           # useCsrf, useWebSocket
-│       ├── pages/                 # Dashboard, Config, Logs
-│       ├── stores/                # Pinia stores (config, tunnel)
-│       └── types/                 # TypeScript type definitions
-├── tests/
-│   ├── conftest.py                # Shared fixtures + CSRF handling
-│   ├── test_schemas.py            # 60 tests — Pydantic model validation
-│   ├── test_config_manager.py     # 9 tests — Config persistence
-│   ├── test_config_api.py         # 25 tests — API integration tests
-│   ├── test_validator.py          # 25 tests — Security validator tests
-│   └── test_e2e_live.py           # 21 tests — E2E against live container
-├── docs/
-│   └── screenshots/               # UI screenshots for documentation
-├── config/                        # Runtime config (gitignored secrets)
-├── Dockerfile                     # Multi-stage build (Node + Python)
-├── docker-compose.yml             # Production deployment
-├── pytest.ini                     # Test configuration
-├── README.md                      # English documentation
-└── README_zh-TW.md                # Traditional Chinese documentation
+quadlet/          woow-cf-tunnel.container, woow-cf-tunnel-data.volume, render-vars
+quadlet/optional/ woow-cf-tunnel-auth.container (Basic-auth proxy)
+config/           woow-cf-tunnel.env.example, auth/auth-nginx.conf
+scripts/          install, upgrade, uninstall, backup, restore, migrate-legacy,
+                  auth-passwd, healthcheck.py, render-args.sh, lib/
+backend/          FastAPI app: routers/{config,tunnel,logs,health,setup},
+                  services/{process_manager,cloudflared_cli,token_store,config_builder,
+                  config_manager,instances,validator}
+frontend/         Vue 3 + Vite SPA
+tests/            dryrun.sh (+ dryrun.local.sh), smoke.sh, harness/, pytest suite
 ```
+
+`scripts/lib/quadlet-lib.sh` is the shared WOOWTECH Quadlet library, vendored unmodified and
+checksummed in CI (decision D8). Do not edit it here.
+
+## Testing
+
+```bash
+tests/dryrun.sh            # render + podman 4.9.3 generator + systemd-analyze + invariants
+tests/harness/run-all.sh   # install/migrate/upgrade/uninstall against mocked podman+systemd
+python -m pytest -m "not e2e" -q
+tests/smoke.sh             # against a real install
+```
+
+No test creates a container except the CI end-to-end job, which also proves the liveness
+chain (bogus token → unhealthy → `HealthOnFailure=kill` → `Restart=always`).
+
+## API reference
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/health` | `{"status":"ok","process_running":true}` |
+| `GET /api/config` | `TunnelConfigRead`: `mode`, `tunnel_name`, `routes[]`, `catch_all_service`, `post_quantum`, `log_level`, `run_parameters`, `no_tls_verify`, `tunnel_token_masked` |
+| `PUT /api/config` | same shape; `tunnel_token` is write-only and stored in `/data/.tunnel_token` |
+| `POST /api/tunnel/{start,stop,restart}`, `GET /api/tunnel/status` | connector control |
+| `GET /api/setup/state`, `POST /api/setup/*`, `WS /api/setup/login` | the local-managed wizard (refused in token mode) |
+| `WS /ws/logs` | live cloudflared output |
+
+Mutating calls need the CSRF double-submit cookie (`x-csrftoken`).
 
 ## Screenshots
-
-### Dashboard — Tunnel Status & Controls
 
 <p align="center">
   <img src="docs/screenshots/dashboard.png" alt="Dashboard" width="720">
 </p>
-
-Real-time monitoring of tunnel status, Podman connection, and token configuration. One-click Start/Stop/Restart controls for the `cloudflared` container.
-
-### Configuration — Basic Settings
-
 <p align="center">
-  <img src="docs/screenshots/config_basic.png" alt="Config Basic Settings" width="720">
+  <img src="docs/screenshots/config_basic.png" alt="Config" width="720">
 </p>
-
-Tunnel token (stored as Podman secret, never written to disk), external hostname, tunnel name, container name, and container image with whitelist validation.
-
-### Configuration — Additional Hosts & Catch-All
-
-<p align="center">
-  <img src="docs/screenshots/config_additional_hosts.png" alt="Config Additional Hosts" width="720">
-</p>
-
-Dynamic hostname-to-service route mappings with per-host chunked encoding toggle. Catch-All service with Nginx Proxy Manager integration — when NPM is enabled, the service URL field is automatically locked to `http://localhost:80`.
-
-### Configuration — Advanced Settings
-
-<p align="center">
-  <img src="docs/screenshots/config_advanced.png" alt="Config Advanced Settings" width="720">
-</p>
-
-Post-quantum cryptography toggle, 8-level log verbosity dropdown (trace/debug/info/notice/warn/warning/error/fatal), and extra CLI arguments for advanced `cloudflared` flags.
-
-### Logs — Real-time Streaming
-
 <p align="center">
   <img src="docs/screenshots/logs.png" alt="Logs" width="720">
 </p>
 
-WebSocket-based real-time log viewer with filter search, auto-scroll, clear, and download controls. Color-coded log levels for quick visual scanning.
-
-## Installation
-
-### Prerequisites
-
-- **Docker** or **Podman** installed and running
-- **Cloudflare account** ([sign up](https://dash.cloudflare.com/sign-up) — free)
-
-The `cloudflared` binary is bundled inside the image, so no separate install and **no Podman/Docker socket mount** is required. Everything runs in a single container.
-
-### Quick Start with Docker Compose
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui.git
-cd Woow_cloudflare_tunnel_webgui
-
-# 2. Build and start (host 8888 → container 8000)
-docker compose up -d --build   # or: podman compose up -d --build
-
-# 3. Open the GUI
-open http://localhost:8888
-```
-
-### Manual Build & Run
-
-The image is single-container and works identically on Docker and Podman — only the binary name differs:
-
-```bash
-# Build
-docker build -t cf-webui:latest .          # or: podman build -t cf-webui:latest .
-
-# Run — map host 8888 to container 8000, persist state in the /data volume
-docker run -d \
-  --name cf-tunnel-webgui \
-  -p 8888:8000 \
-  -v cf_data:/data \
-  -e CSRF_SECRET=$(openssl rand -hex 32) \
-  cf-webui:latest
-# Podman: replace `docker` with `podman`; the command is otherwise the same.
-```
-
-`/data` holds tunnel credentials, route config and the local cloudflared state — keep it on a named volume so it survives container recreation.
-
-### Operating Modes
-
-| Mode | When to use | What you provide |
-|------|-------------|------------------|
-| **Local-managed** | You want the GUI to create and run the tunnel for you | Log in to Cloudflare from the GUI (self-service, below) |
-| **Token** | You already have a tunnel token from the Cloudflare dashboard | Paste the tunnel token in the Config page |
-
-#### Cloudflare login (self-service, local-managed mode)
-
-1. Open the GUI and start the login flow — it shows a Cloudflare URL/code.
-2. Open that URL in your browser, sign in, and authorize the zone.
-3. The credentials are written into `/data`; the GUI then creates and starts the tunnel for you.
-
-> **Deleting a route does not remove its DNS record.** When you delete a hostname/route in the GUI, the corresponding CNAME stays in your Cloudflare DNS. Remove it manually in the Cloudflare dashboard to fully retire the hostname.
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CSRF_SECRET` | Auto-generated | Secret key for CSRF token signing |
-
-## Configuration
-
-### First-time Setup
-
-1. Open `http://localhost:8888` in your browser
-2. Navigate to the **Config** page
-3. Enter your **Cloudflare Tunnel Token** (stored as a Podman secret)
-4. Configure container name and image
-5. Click **Save & Restart** to start the tunnel
-
-### Additional Hosts
-
-Route multiple hostnames through a single tunnel:
-
-1. Click **+ Add Host** in the Additional Hosts section
-2. Enter the hostname (e.g., `app.example.com`)
-3. Enter the backend service URL (e.g., `http://localhost:3000`)
-4. Optionally toggle **Disable chunked transfer encoding**
-5. Repeat for additional hosts, then click **Save**
-
-### Nginx Proxy Manager Integration
-
-If you use Nginx Proxy Manager:
-
-1. Enable the **Nginx Proxy Manager** toggle in the Catch-All Service section
-2. The catch-all service URL is automatically set to `http://localhost:80`
-3. NPM handles SSL termination and reverse proxying
-
-## Security
-
-### Defense Layers
-
-```
-┌─────────────────────────────────────────────────┐
-│                 CSRF Protection                  │
-│          Double Submit Cookie Pattern            │
-├─────────────────────────────────────────────────┤
-│              Input Validation                    │
-│    Pydantic field_validator + regex patterns      │
-├─────────────────────────────────────────────────┤
-│             Image Whitelist                      │
-│   Only cloudflare/cloudflared images allowed     │
-├─────────────────────────────────────────────────┤
-│          Injection Prevention                    │
-│  Shell chars blocked: ; & | ` $() (){}           │
-├─────────────────────────────────────────────────┤
-│            Token Security                        │
-│   Stored as Podman secret, never on disk         │
-│   API responses return masked values only        │
-└─────────────────────────────────────────────────┘
-```
-
-| Attack Vector | Protection |
-|---------------|------------|
-| CSRF | Double-submit cookie with `SameSite=Lax` |
-| Shell injection in extra_args | Regex blocks `;`, `&`, `|`, `` ` ``, `$()`, `(){}` |
-| Malicious container image | Whitelist: only `cloudflare/cloudflared` from `docker.io` |
-| Container name injection | Docker-compatible name regex: `[a-zA-Z0-9][a-zA-Z0-9_.-]*` |
-| Token leakage | Stored as Podman secret; API returns `********` |
-| XSS | Vue 3 auto-escaping + Content Security Policy |
-
-## API Reference
-
-### Health Check
-
-```http
-GET /api/health
-```
-
-```json
-{
-  "status": "ok",
-  "podman_connected": true,
-  "tunnel_status": "running"
-}
-```
-
-### Get Configuration
-
-```http
-GET /api/config
-```
-
-```json
-{
-  "tunnel_token_secret": "cf-tunnel-token",
-  "tunnel_token_masked": "********",
-  "post_quantum": false,
-  "log_level": "info",
-  "extra_args": "",
-  "container_name": "cloudflared",
-  "container_image": "cloudflare/cloudflared:latest",
-  "external_hostname": "",
-  "additional_hosts": [],
-  "tunnel_name": "",
-  "catch_all_service": "",
-  "nginx_proxy_manager": false
-}
-```
-
-### Update Configuration
-
-```http
-PUT /api/config
-Content-Type: application/json
-X-CSRFToken: <token>
-
-{
-  "container_image": "cloudflare/cloudflared:latest",
-  "container_name": "cloudflared",
-  "log_level": "debug",
-  "external_hostname": "home.example.com",
-  "additional_hosts": [
-    {
-      "hostname": "app.example.com",
-      "service": "http://localhost:3000",
-      "disableChunkedEncoding": false
-    }
-  ],
-  "nginx_proxy_manager": true
-}
-```
-
-### Tunnel Controls
-
-```http
-POST /api/tunnel/start
-POST /api/tunnel/stop
-POST /api/tunnel/restart
-GET  /api/tunnel/status
-```
-
-### Log Streaming
-
-```javascript
-const ws = new WebSocket('ws://localhost:8888/api/logs/stream');
-ws.onmessage = (event) => console.log(event.data);
-```
-
-## Testing
-
-### Test Suite Overview
-
-| Test File | Tests | Coverage |
-|-----------|-------|----------|
-| `test_schemas.py` | 60 | Pydantic models, LogLevel enum, AdditionalHost, injection prevention |
-| `test_config_api.py` | 25 | Config API GET/PUT, CSRF, error codes 400/422 |
-| `test_validator.py` | 25 | Image whitelist, token format, shell injection (6 vectors) |
-| `test_config_manager.py` | 9 | Config persistence, merge logic, migration |
-| `test_e2e_live.py` | 21 | End-to-end against live container |
-| **Total** | **140** | **100% pass rate** |
-
-### Running Tests
-
-```bash
-# All tests (unit + integration + E2E)
-python3 -m pytest tests/ -v
-
-# Unit/integration only (no container required)
-python3 -m pytest tests/ -m "not e2e" -v
-
-# E2E only (requires container running on localhost:8888)
-python3 -m pytest tests/ -m e2e -v
-```
-
-### Security Test Coverage
-
-- 6 shell injection attack vectors blocked
-- 8 malicious image names rejected
-- 6 token injection patterns blocked
-- 7 invalid container name formats rejected
-- CSRF bypass attempts blocked
-
-## Tech Stack
-
-### Backend
-
-| Package | Version | Purpose |
-|---------|---------|---------|
-| FastAPI | 0.115.6 | Async REST API framework |
-| Uvicorn | 0.34.0 | ASGI server |
-| Pydantic | 2.10.4 | Data validation and serialization |
-| Podman SDK | 5.2+ | Container management via Podman API |
-| Starlette-CSRF | 3.0.0 | CSRF protection middleware |
-| WebSockets | 14.2 | Real-time log streaming |
-| Aiofiles | 24.1.0 | Async file operations |
-
-### Frontend
-
-| Package | Version | Purpose |
-|---------|---------|---------|
-| Vue | 3.5.13 | Reactive UI framework |
-| Vue Router | 4.5.0 | Client-side routing |
-| Pinia | 2.3.0 | State management |
-| TypeScript | 5.7.3 | Type-safe JavaScript |
-| Vite | 6.0.7 | Build tool and dev server |
-| Tailwind CSS | 3.4.17 | Utility-first CSS framework |
-| Heroicons | 2.2.0 | SVG icon library |
-
-### Infrastructure
-
-| Component | Purpose |
-|-----------|---------|
-| Multi-stage Dockerfile | Node.js build + Python runtime |
-| Docker Compose 3.8 | Production deployment |
-| Tini | PID 1 init system for proper signal handling |
-| Podman Socket | Rootless container management |
-
-## Changelog
-
-### v1.0.0 (2026-04-11)
-
-**New Features**
-- Full HAOS Cloudflared add-on parameter compatibility
-- Additional Hosts dynamic routing with chunked encoding toggle
-- Catch-All Service with Nginx Proxy Manager integration
-- Post-Quantum Cryptography toggle
-- 8-level log verbosity (trace/debug/info/notice/warn/warning/error/fatal)
-- Tunnel Name and External Hostname configuration
-
-**Security**
-- CSRF double-submit cookie protection
-- Shell injection prevention (6 attack vectors)
-- Container image whitelist validation
-- Token stored as Podman secret, never persisted to disk
-
-**Testing**
-- 140 automated tests (100% pass rate)
-- Unit, integration, and E2E test coverage
-- Security attack vector validation
-
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui/issues)
-- **Email**: support@woowtech.io
-- **Demo**: Deployed via Cloudflare Tunnel
+- Issues: [GitHub Issues](https://github.com/WOOWTECH/Woow_cloudflare_tunnel_webgui/issues)
+- Changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## License
 
-This project is licensed under the MIT License.
+MIT.
 
 ---
 
 <p align="center">
-  Built with Vue 3 + FastAPI + Podman by <a href="https://github.com/WOOWTECH">WOOWTECH</a>
+  Built with Vue 3 + FastAPI + Podman Quadlet by <a href="https://github.com/WOOWTECH">WOOWTECH</a>
 </p>

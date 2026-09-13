@@ -1,0 +1,13 @@
+# /data for woow-cf-tunnel: settings.json, .tunnel_token (0600), .csrf_secret, and in
+# local-managed mode cert.pem / tunnel.json / config.json.
+#
+# VolumeName= adopts an existing volume in place ("podman volume create --ignore" leaves
+# it untouched). Without it, Quadlet would create an empty systemd-woow-cf-tunnel-data
+# volume and the tunnel would come up unconfigured. CF_DATA_VOLUME in the env file:
+#   legacy "podman run -v cf_data:/data" (toypark1234):  cf_data
+#   compose project woow_cloudflare_tunnel_webgui:        woow_cloudflare_tunnel_webgui_cf_data
+# The label is applied only when the volume is created.
+
+[Volume]
+VolumeName=@@CF_DATA_VOLUME@@
+Label=io.woowtech.app=woow-cf-tunnel
