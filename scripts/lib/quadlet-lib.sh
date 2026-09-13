@@ -1079,6 +1079,27 @@ ql_rollback_strategy() {
 # _ql_meta_get <file> <key>: last KEY=value in a capture meta file ("" if absent)
 _ql_meta_get() { [[ -f $1 ]] && sed -n "s/^$2=//p" "$1" | tail -n1; return 0; }
 
+# _ql_read_argv0 <file> <out-array-name>: read a NUL separated argv written by
+#   `podman inspect --format '{{range ...}}{{printf "%s\x00" .}}{{end}}'`. podman appends a
+#   newline AFTER the whole template output, so the text that follows the last NUL is that
+#   newline and not an argument: an empty CreateCommand arrives as a one-byte "\n" file, and a
+#   real one arrives with a stray trailing element that would otherwise be handed to
+#   `podman create` as part of the container command. Verified on podman 4.9.3. The chunk is
+#   dropped only when the file does not end in NUL, so an argument that is genuinely empty or
+#   genuinely a newline is kept.
+_ql_read_argv0() {
+  local f=$1
+  local -n __ql_ra=$2
+  __ql_ra=()
+  [[ -s $f ]] || return 0
+  mapfile -d '' -t __ql_ra <"$f"
+  local n=${#__ql_ra[@]} last
+  ((n)) || return 0
+  last=$(tail -c1 -- "$f" | od -An -tx1 | tr -d ' \n')
+  [[ $last == 00 ]] || unset "__ql_ra[$((n - 1))]"
+  return 0
+}
+
 # _ql_image_candidates <image_ref> <image_id> <out-array-name>: the spellings the image
 # argument of a CreateCommand may use. podman records what the operator typed
 # (`pgvector/pgvector:pg16`) while .ImageName is fully qualified
@@ -1211,7 +1232,7 @@ ql_capture_container() {
     || ql_warn "could not read the labels of $name (kept in inspect.json)"
 
   local -a q_cc=() q_new=() q_cand=()
-  mapfile -d '' -t q_cc <"$dir/createcommand.argv0"
+  _ql_read_argv0 "$dir/createcommand.argv0" q_cc
   _ql_image_candidates "$image_ref" "$image_id" q_cand
   local recreatable=1 imgidx=-1 podman_bin=${q_cc[0]:-}
   if ((${#q_cc[@]} == 0)); then
