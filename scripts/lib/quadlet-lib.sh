@@ -392,7 +392,8 @@ _ql_lock_steal() {
   return 0
 }
 
-# _ql_lock_inherited <app> <lockdir>: our caller already holds exactly this lock and is alive
+# _ql_lock_inherited <app> <lockdir>: prints the pid of the live process that already holds
+# exactly this lock and passed it to us through QL_LOCK_HELD; 1 when there is none.
 _ql_lock_inherited() {
   local app=$1 lockdir=$2 line a boot pid start d owner
   [[ -n ${QL_LOCK_HELD:-} ]] || return 1
@@ -403,7 +404,7 @@ _ql_lock_inherited() {
     _ql_owner_live "$boot|$pid|$start" || continue
     owner=$(_ql_lock_owner "$lockdir") || continue
     [[ $owner == "$boot|$pid|$start" ]] || continue
-    ql_info "$app: keeping the lock held by the calling script (pid $pid)"
+    printf '%s' "$pid"
     return 0
   done <<<"$QL_LOCK_HELD"
   return 1
@@ -427,7 +428,18 @@ ql_lock() {
   dir=$(_ql_state_dir "$app")
   lockdir=$dir/lock.d
   [[ ${_QL_LOCK_OWNED[$app]:-} == "$lockdir" ]] && return 0
-  _ql_lock_inherited "$app" "$lockdir" && return 0
+  if pid=$(_ql_lock_inherited "$app" "$lockdir"); then
+    if [[ $pid == "$$" ]]; then
+      # same process, new program image: upgrade.sh `exec`s install.sh. Take the lock back,
+      # or nobody would clear it when this program ends.
+      _QL_LOCK_OWNED[$app]=$lockdir
+      _ql_lock_arm_traps
+      ql_info "$app: resuming the lock this process already holds"
+    else
+      ql_info "$app: keeping the lock held by the calling script (pid $pid)"
+    fi
+    return 0
+  fi
   mkdir -p "$dir" || ql_die "cannot create $dir"
   chmod 700 "$dir" || ql_die "cannot chmod $dir"
   rec=$(_ql_owner_record)
