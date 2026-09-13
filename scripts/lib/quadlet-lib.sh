@@ -25,10 +25,11 @@
 #                       CONTAINS a guarded path, e.g. pi-web's %h:/host%h (ql_check_path_mounted)
 #   QL_CAPTURE_RW_WARN_BYTES  writable-layer size above which ql_capture_container warns
 #                       that --commit was not used                  (1048576)
+#   QL_LOCK_GRACE       seconds before a lock with no owner file is stale (30); see ql_lock
 #   QL_LOG_PREFIX       log prefix                   (basename of $0)
 
 # shellcheck disable=SC2034 # public: read by sync-lib.sh, repo scripts and CI
-QL_LIB_VERSION="1.4.0"
+QL_LIB_VERSION="1.5.0"
 
 # ---------------------------------------------------------------------------------------
 # logging
@@ -272,16 +273,256 @@ ql_enable_podman_socket() {
   ql_info "enabled podman.socket"
 }
 
-# ql_lock <app>: exclusive per-app lock for the rest of the calling script (flock).
+# ---------------------------------------------------------------------------------------
+# per-app lock
+# ---------------------------------------------------------------------------------------
+# The lock is a DIRECTORY (mkdir(2) is atomic) holding an "owner" file whose first line
+# records boot id, pid and that pid's start time. It deliberately keeps no file descriptor.
+#
+# Until 1.5.0 it was an flock on an fd held open for the rest of the script. Bash opens
+# `exec {fd}>` without FD_CLOEXEC, so every child inherited it, and rootless podman leaves
+# children behind that outlive the script by design: conmon, slirp4netns, rootlessport, the
+# catatonit pause process. One of them then held the flock for as long as the container
+# lived, and the next install/upgrade/uninstall of that app died with "another ... is
+# running". Bash cannot set close-on-exec on a descriptor, so the descriptor had to go.
+#
+# Who holds the lock is decided by the OWNER RECORD, not by the existence of the directory:
+# a lock whose owner is no longer running (crash, SIGKILL, reboot) is stale and is taken
+# over, a lock whose owner is alive is refused. Releasing is therefore best effort - the
+# EXIT/INT/TERM/HUP traps below chain onto whatever the script already had, and a script
+# that later clears its own EXIT trap only leaves litter that the next run clears away.
+#
+#   QL_LOCK_GRACE   seconds before a lock with no readable owner file counts as stale (30)
+#   QL_LOCK_TRIES   acquisition attempts before giving up (50)
+#   QL_LOCK_NAP     seconds between attempts (0.2)
+#   QL_LOCK_HELD    exported; lets a child script re-use the lock its caller holds
+#
+# QL_LOCK_FD is kept only so that scripts written against <= 1.4.0 still parse under
+# `set -u`; it is always empty, because there is no descriptor any more.
+# shellcheck disable=SC2034 # public, deprecated: always empty since 1.5.0
+QL_LOCK_FD=''
+export QL_LOCK_HELD=${QL_LOCK_HELD:-}
+declare -gA _QL_LOCK_OWNED=()     # app -> lock directory this process created
+declare -gA _QL_LOCK_PREV=()      # signal -> `trap -p` output from before we armed ours
+declare -gA _QL_LOCK_PREV_BODY=() # signal -> the command that trap would run
+_QL_LOCK_TRAPPED=0
+_QL_LOCK_BOOT=''
+_QL_LOCK_REC=''
+
+_ql_boot_id() {
+  if [[ -z $_QL_LOCK_BOOT ]]; then
+    [[ -r /proc/sys/kernel/random/boot_id ]] && read -r _QL_LOCK_BOOT </proc/sys/kernel/random/boot_id
+    [[ -n $_QL_LOCK_BOOT ]] || _QL_LOCK_BOOT=no-boot-id
+  fi
+  printf '%s' "$_QL_LOCK_BOOT"
+}
+
+# _ql_pid_start <pid>: field 22 of /proc/<pid>/stat (start time in clock ticks). 1 when gone.
+# The comm field may contain spaces and ')', but it is the last ')' on the line.
+_ql_pid_start() {
+  local st rest
+  local -a q_f=()
+  [[ $1 =~ ^[0-9]+$ ]] || return 1
+  { read -r st </proc/"$1"/stat; } 2>/dev/null || return 1
+  rest=${st##*)}
+  read -ra q_f <<<"$rest" # q_f[0] is field 3 (state), so field 22 is q_f[19]
+  [[ -n ${q_f[19]:-} ]] || return 1
+  printf '%s' "${q_f[19]}"
+}
+
+# _ql_owner_record: "<boot-id>|<pid>|<start>" for this shell
+_ql_owner_record() {
+  local s
+  if [[ -z $_QL_LOCK_REC ]]; then
+    s=$(_ql_pid_start "$$") || s=0
+    _QL_LOCK_REC="$(_ql_boot_id)|$$|$s"
+  fi
+  printf '%s' "$_QL_LOCK_REC"
+}
+
+# _ql_owner_live <record>: the process that wrote the record is still running
+_ql_owner_live() {
+  local boot pid start now
+  IFS='|' read -r boot pid start <<<"$1"
+  [[ -n ${pid:-} && $pid =~ ^[0-9]+$ ]] || return 1
+  [[ $boot == "$(_ql_boot_id)" ]] || return 1 # written before the last reboot
+  now=$(_ql_pid_start "$pid") || return 1
+  [[ $now == "$start" ]] # a recycled pid has a different start time
+}
+
+# _ql_lock_owner <lockdir>: the owner record ("" / 1 when there is none to read)
+_ql_lock_owner() {
+  local rec=''
+  { read -r rec <"$1/owner"; } 2>/dev/null || return 1
+  [[ -n $rec ]] || return 1
+  printf '%s' "$rec"
+}
+
+# _ql_older_than <path> <seconds>
+_ql_older_than() {
+  local mt now
+  mt=$(stat -c %Y -- "$1" 2>/dev/null) || return 1
+  now=$(date +%s)
+  ((now - mt > $2))
+}
+
+_ql_lock_nap() { sleep "${QL_LOCK_NAP:-0.2}" 2>/dev/null || true; }
+
+# _ql_lock_steal <lockdir> <stale-record> <app>: take a dead owner's lock away. The steal
+# token is named after the record being replaced, so only one run can act on a given stale
+# owner and nobody can delete a lock that has meanwhile been taken by a live process.
+_ql_lock_steal() {
+  local lockdir=$1 rec=$2 app=$3 token again pid
+  token=$lockdir.steal-${rec//[!0-9A-Za-z]/_}
+  if ! mkdir "$token" 2>/dev/null; then
+    _ql_older_than "$token" "${QL_LOCK_GRACE:-30}" && rm -rf -- "$token"
+    return 1
+  fi
+  again=$(_ql_lock_owner "$lockdir") || again=''
+  if [[ $again == "$rec" ]]; then
+    if [[ -z $rec ]]; then
+      ql_warn "$app: clearing a lock directory that never got an owner file ($lockdir)"
+    else
+      pid=${rec#*|}; pid=${pid%%|*}
+      ql_warn "$app: taking over the lock left behind by pid ${pid:-?}, which is no longer running ($lockdir)"
+    fi
+    rm -rf -- "$lockdir"
+  fi
+  rm -rf -- "$token"
+  return 0
+}
+
+# _ql_lock_inherited <app> <lockdir>: our caller already holds exactly this lock and is alive
+_ql_lock_inherited() {
+  local app=$1 lockdir=$2 line a boot pid start d owner
+  [[ -n ${QL_LOCK_HELD:-} ]] || return 1
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    IFS='|' read -r a boot pid start d <<<"$line"
+    [[ $a == "$app" && $d == "$lockdir" ]] || continue
+    _ql_owner_live "$boot|$pid|$start" || continue
+    owner=$(_ql_lock_owner "$lockdir") || continue
+    [[ $owner == "$boot|$pid|$start" ]] || continue
+    ql_info "$app: keeping the lock held by the calling script (pid $pid)"
+    return 0
+  done <<<"$QL_LOCK_HELD"
+  return 1
+}
+
+# _ql_lock_publish: hand our locks to child scripts through the environment
+_ql_lock_publish() {
+  local app out=''
+  for app in "${!_QL_LOCK_OWNED[@]}"; do
+    out+="$app|$(_ql_owner_record)|${_QL_LOCK_OWNED[$app]}"$'\n'
+  done
+  export QL_LOCK_HELD=$out
+}
+
+# ql_lock <app>: exclusive per-app lock for the rest of the calling script. Dies when
+# another live run holds it; takes over a lock whose owner died; a child script that
+# inherited QL_LOCK_HELD keeps its caller's lock instead of taking a second one.
 ql_lock() {
   _ql_need_app "${1:-}"
-  local dir fd
-  dir=$(_ql_state_dir "$1")
+  local app=$1 dir lockdir rec owner pid n=0
+  dir=$(_ql_state_dir "$app")
+  lockdir=$dir/lock.d
+  [[ ${_QL_LOCK_OWNED[$app]:-} == "$lockdir" ]] && return 0
+  _ql_lock_inherited "$app" "$lockdir" && return 0
   mkdir -p "$dir" || ql_die "cannot create $dir"
-  exec {fd}>"$dir/lock" || ql_die "cannot open $dir/lock"
-  flock -n "$fd" || ql_die "another install/upgrade/uninstall of $1 is running (lock $dir/lock)"
-  # shellcheck disable=SC2034 # public: the fd holding the lock
-  QL_LOCK_FD=$fd
+  chmod 700 "$dir" || ql_die "cannot chmod $dir"
+  rec=$(_ql_owner_record)
+  while ((n++ < ${QL_LOCK_TRIES:-50})); do
+    if mkdir "$lockdir" 2>/dev/null; then
+      {
+        printf '%s\n' "$rec"
+        printf 'app=%s\nscript=%s\nsince=%s\n' "$app" "${QL_LOG_PREFIX:-${0##*/}}" "$(date -Is 2>/dev/null || date)"
+      } >"$lockdir/owner" || { rm -rf -- "$lockdir"; ql_die "cannot write $lockdir/owner"; }
+      _QL_LOCK_OWNED[$app]=$lockdir
+      _ql_lock_publish
+      _ql_lock_arm_traps
+      return 0
+    fi
+    owner=$(_ql_lock_owner "$lockdir") || owner=''
+    # the winner of mkdir may not have written its owner file yet; only a directory that has
+    # sat there without one for the whole grace period counts as broken.
+    if [[ -z $owner ]] && ! _ql_older_than "$lockdir" "${QL_LOCK_GRACE:-30}"; then
+      _ql_lock_nap
+      continue
+    fi
+    if _ql_owner_live "$owner"; then
+      pid=${owner#*|}; pid=${pid%%|*}
+      ql_die "another install/upgrade/uninstall of $app is running (pid $pid; lock $lockdir)"
+    fi
+    _ql_lock_steal "$lockdir" "$owner" "$app" || _ql_lock_nap
+  done
+  ql_die "could not take the lock for $app after $((n - 1)) attempts (lock $lockdir); remove it by hand if no install/upgrade/uninstall of $app is running"
+}
+
+# ql_unlock [app...]: release locks this process took (default: all of them). Use it before
+# handing the app over to something that outlives this script, e.g. a systemd-run watchdog.
+# shellcheck disable=SC2120 # public: the app list is optional, callers usually want all
+ql_unlock() {
+  local app owner
+  local -a q_apps=()
+  if (($#)); then q_apps=("$@"); else q_apps=("${!_QL_LOCK_OWNED[@]}"); fi
+  for app in "${q_apps[@]}"; do
+    [[ -n ${_QL_LOCK_OWNED[$app]:-} ]] || continue
+    owner=$(_ql_lock_owner "${_QL_LOCK_OWNED[$app]}") || owner=''
+    [[ $owner == "$(_ql_owner_record)" ]] && rm -rf -- "${_QL_LOCK_OWNED[$app]}"
+    unset "_QL_LOCK_OWNED[$app]"
+  done
+  _ql_lock_publish
+  return 0
+}
+
+# _ql_trap_body "<trap -p output>": the command that trap runs ("" for none and for SIG_IGN)
+_ql_trap_body() {
+  local q=$1
+  [[ $q == "trap -- "* ]] || { printf ''; return 0; }
+  q=${q#trap -- }
+  q=${q% *}             # drop the trailing signal name
+  eval "printf '%s' $q" # what is left is exactly one shell-quoted word
+}
+
+_ql_lock_rc() { return "${1:-0}"; }
+
+# _ql_lock_on <signal>: release, then defer to whatever the script had trapped before us
+_ql_lock_on() {
+  local rc=$? sig=$1 body=${_QL_LOCK_PREV_BODY[$1]:-} raw=${_QL_LOCK_PREV[$1]:-} e=0
+  [[ $- == *e* ]] && e=1
+  if [[ -n $body ]]; then
+    set +e
+    _ql_lock_rc "$rc" # so a chained handler still sees the right $?
+    eval "$body"
+    ((e)) && set -e
+  fi
+  # never let a subshell drop the locks of the shell that took them
+  [[ ${BASHPID:-$$} == "$$" ]] && ql_unlock
+  if [[ $sig != EXIT ]]; then
+    [[ -n $raw && -z $body ]] && return 0 # the signal was ignored before us: keep ignoring it
+    trap - "$sig"
+    kill -s "$sig" "$$" 2>/dev/null
+  fi
+  return "$rc"
+}
+
+# _ql_lock_arm_traps: release on a clean exit, on ql_die and on a signal, without throwing
+# away a handler the script installed earlier.
+_ql_lock_arm_traps() {
+  ((_QL_LOCK_TRAPPED)) && return 0
+  # Only the shell that owns the traps may touch them. In a subshell `trap -p` still prints
+  # the PARENT's handlers even though they were reset to the default, so chaining there
+  # would resurrect a handler the parent has yet to run. A subshell releases nothing anyway
+  # (see _ql_lock_on); the lock it left behind is stale once its parent is gone.
+  [[ ${BASHPID:-$$} == "$$" ]] || return 0
+  _QL_LOCK_TRAPPED=1
+  local sig
+  for sig in EXIT INT TERM HUP; do
+    _QL_LOCK_PREV[$sig]=$(trap -p "$sig")
+    _QL_LOCK_PREV_BODY[$sig]=$(_ql_trap_body "${_QL_LOCK_PREV[$sig]}")
+    # shellcheck disable=SC2064 # $sig must expand now
+    trap "_ql_lock_on $sig" "$sig"
+  done
 }
 
 # ---------------------------------------------------------------------------------------

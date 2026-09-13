@@ -408,9 +408,12 @@ cf_freeze() {
 }
 # cf_detach <run> <unit> <script-name> <description>
 cf_detach() {
-  # Hand the app lock over: the watchdog takes it, and a transient unit does not
-  # inherit our file descriptors.
-  if [[ -n ${QL_LOCK_FD:-} ]]; then
+  # Hand the app lock over: the watchdog takes it, and a transient unit inherits neither our
+  # environment nor our file descriptors. Since quadlet-lib 1.5.0 the lock is a directory with
+  # an owner record rather than an inherited descriptor, so it is given back with ql_unlock.
+  if declare -F ql_unlock >/dev/null 2>&1; then
+    ql_unlock
+  elif [[ -n ${QL_LOCK_FD:-} ]]; then
     eval "exec ${QL_LOCK_FD}>&-"
     QL_LOCK_FD=''
   fi
