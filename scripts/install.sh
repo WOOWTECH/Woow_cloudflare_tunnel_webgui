@@ -76,8 +76,9 @@ unit_up() {
 # ---- 1. host preflight ---------------------------------------------------------------------
 ql_preflight "$PODMAN_MIN"
 ql_enable_linger
-# upgrade.sh and migrate-legacy.sh hold the app lock while they run --stage
-[[ ${CF_LOCK_HELD:-0} == 1 ]] || ql_lock "$APP"
+# upgrade.sh and migrate-legacy.sh run this script with --stage while they hold the app lock;
+# ql_lock sees their QL_LOCK_HELD and keeps their lock instead of taking a second one.
+ql_lock "$APP"
 
 # ---- 2. per-host settings (D2: rendered from the env file, never committed) ---------------
 ql_env_ensure "$REPO/config/$APP.env.example" "$ENV_FILE"
@@ -183,7 +184,7 @@ check_htpasswd() {
 
 # ---- 6. render the selected units, validate with the 4.9.3 generator ------------------------
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/$APP-install.XXXXXX")
-trap 'rm -rf "$WORK"' EXIT
+ql_cleanup work rm -rf "$WORK"
 mkdir -p "$WORK/src" "$WORK/out"
 cp -p "$REPO"/quadlet/*.container "$REPO"/quadlet/*.volume "$WORK/src/"
 ((auth)) && cp -p "$REPO/quadlet/optional/woow-cf-tunnel-auth.container" "$WORK/src/"

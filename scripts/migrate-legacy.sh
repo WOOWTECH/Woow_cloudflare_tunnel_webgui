@@ -110,10 +110,10 @@ cmd_preflight() {
   STAGE_DIR=$CF_STATE_ROOT/staged
   echo "== 1. build and stage (the legacy unit keeps serving)"
   if [[ ! -f $ENV_FILE ]]; then
-    CF_LOCK_HELD=1 "$HERE/install.sh" --stage --stage-dir "$STAGE_DIR" "${stage_args[@]}" || true
+    "$HERE/install.sh" --stage --stage-dir "$STAGE_DIR" "${stage_args[@]}" || true
     ql_die "created $ENV_FILE: check CF_DATA_VOLUME (the legacy volume), UVICORN_PORT and CF_METRICS_ADDR, then re-run preflight"
   fi
-  CF_LOCK_HELD=1 "$HERE/install.sh" --stage --stage-dir "$STAGE_DIR" "${stage_args[@]}" \
+  "$HERE/install.sh" --stage --stage-dir "$STAGE_DIR" "${stage_args[@]}" \
     || { echo "preflight: staging failed; nothing was changed."; return 1; }
   local cont=$STAGE_DIR/woow-cf-tunnel.container vol=$STAGE_DIR/woow-cf-tunnel-data.volume
   GUI_PORT=$(sed -n 's/^Environment=UVICORN_PORT=//p' "$cont")

@@ -411,12 +411,7 @@ cf_detach() {
   # Hand the app lock over: the watchdog takes it, and a transient unit inherits neither our
   # environment nor our file descriptors. Since quadlet-lib 1.5.0 the lock is a directory with
   # an owner record rather than an inherited descriptor, so it is given back with ql_unlock.
-  if declare -F ql_unlock >/dev/null 2>&1; then
-    ql_unlock
-  elif [[ -n ${QL_LOCK_FD:-} ]]; then
-    eval "exec ${QL_LOCK_FD}>&-"
-    QL_LOCK_FD=''
-  fi
+  ql_unlock
   # KillMode=mixed: stopping the unit SIGTERMs only the script, whose trap then rolls
   # back; the commands it runs are not killed mid-rollback.
   systemd-run --user --collect --unit="$2" --description="$4" \
