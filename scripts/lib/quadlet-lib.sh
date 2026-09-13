@@ -29,7 +29,7 @@
 #   QL_LOG_PREFIX       log prefix                   (basename of $0)
 
 # shellcheck disable=SC2034 # public: read by sync-lib.sh, repo scripts and CI
-QL_LIB_VERSION="1.5.0"
+QL_LIB_VERSION="1.6.0"
 
 # ---------------------------------------------------------------------------------------
 # logging
@@ -508,8 +508,11 @@ _ql_lock_on() {
     eval "$body"
     ((e)) && set -e
   fi
-  # never let a subshell drop the locks of the shell that took them
-  [[ ${BASHPID:-$$} == "$$" ]] && ql_unlock
+  # never let a subshell run the hooks of - or drop the locks taken by - the shell it forked from
+  if [[ ${BASHPID:-$$} == "$$" ]]; then
+    _ql_cleanup_run "$rc"
+    ql_unlock
+  fi
   if [[ $sig != EXIT ]]; then
     [[ -n $raw && -z $body ]] && return 0 # the signal was ignored before us: keep ignoring it
     trap - "$sig"
@@ -535,6 +538,63 @@ _ql_lock_arm_traps() {
     # shellcheck disable=SC2064 # $sig must expand now
     trap "_ql_lock_on $sig" "$sig"
   done
+}
+
+# ---------------------------------------------------------------------------------------
+# cleanup hooks: tidy-up that cannot throw the lock's release away
+# ---------------------------------------------------------------------------------------
+# A script that has to tidy up on the way out - a staging directory, a unit it stopped, a
+# warning that a rollback did not finish - registers the command here instead of calling
+# `trap ... EXIT` itself. A bare trap REPLACES the handler ql_lock installed, so the lock
+# directory outlives the run; every later run then reports "taking over the lock left
+# behind by pid N, which is no longer running", a crash report for a clean exit. Hooks
+# cannot do that, because they run inside that handler rather than instead of it.
+#
+#   ql_cleanup <tag> <command> [arg...]   run it on the way out (EXIT, INT, TERM, HUP)
+#   ql_cleanup_clear <tag>...             cancel it (what `trap - EXIT` used to be for)
+#
+# The command and its arguments are taken as they are at registration time and run as a
+# plain command, not as text: give a shell function when the work depends on values that
+# are still to be computed. Inside a hook $? is the status the script is ending with.
+# Hooks run once, most recently registered first, before the locks are released; a tag
+# registered again keeps its place and replaces its command; a hook that fails does not
+# stop the others. Registering one arms the traps, so it works without a lock too.
+declare -gA _QL_CLEANUP=()      # tag -> the shell-quoted command line
+declare -ga _QL_CLEANUP_TAGS=() # registration order
+_QL_CLEANUP_DONE=0
+
+ql_cleanup() {
+  local tag=${1:-}
+  [[ $tag =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || ql_die "ql_cleanup: <tag> must be an identifier, got '$tag'"
+  shift
+  (($#)) || ql_die "ql_cleanup $tag: no command to run"
+  [[ -n ${_QL_CLEANUP[$tag]+x} ]] || _QL_CLEANUP_TAGS+=("$tag")
+  _QL_CLEANUP[$tag]=$(printf '%q ' "$@")
+  _ql_lock_arm_traps
+}
+
+# shellcheck disable=SC2120 # public: callers may clear one tag, several, or (rarely) none
+ql_cleanup_clear() {
+  local tag
+  for tag in "$@"; do unset "_QL_CLEANUP[$tag]"; done
+  return 0
+}
+
+# _ql_cleanup_run <status>: run the hooks, most recent first, exactly once
+_ql_cleanup_run() {
+  local rc=$1 tag e=0 i
+  ((_QL_CLEANUP_DONE)) && return 0
+  _QL_CLEANUP_DONE=1
+  [[ $- == *e* ]] && e=1
+  set +e
+  for ((i = ${#_QL_CLEANUP_TAGS[@]} - 1; i >= 0; i--)); do
+    tag=${_QL_CLEANUP_TAGS[i]}
+    [[ -n ${_QL_CLEANUP[$tag]+x} ]] || continue
+    _ql_lock_rc "$rc" # so the hook sees the status the script is ending with
+    eval "${_QL_CLEANUP[$tag]}"
+  done
+  ((e)) && set -e
+  return 0
 }
 
 # ---------------------------------------------------------------------------------------
