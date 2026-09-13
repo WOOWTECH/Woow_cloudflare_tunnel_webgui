@@ -7,6 +7,8 @@
 #   running_image                    Image= of woow-cf-tunnel.container at its last (re)start
 #   new_nrestarts                    NRestarts of woow-cf-tunnel.service
 # MOCK_PERSIST=1: the legacy container survives a stop (openclaw's podman start -a unit).
+# MOCK_PODMAN_RESTART=enabled: this user's podman-restart.service is enabled, so at boot
+#   `podman start --all --filter restart-policy=always` runs. migrate-legacy.sh asks for this.
 set -u
 S=${MOCK_STATE:?}
 echo "systemctl $*" >>"$S/calls.log"
@@ -16,6 +18,7 @@ P=$HOME/.config/systemd/user
 st() { cat "$S/$1" 2>/dev/null || echo "${2:-0}"; }
 kind() {
   case $1 in
+    podman-restart.service) echo restart_unit ;;
     cf-tunnel-webgui.service | podman-cf-tunnel-webgui.service) echo legacy ;;
     woow-cf-tunnel.service | woow-cf-tunnel-auth.service | woow-cf-tunnel-data-volume.service) echo quadlet ;;
     woow-cf-tunnel-migrate-* | woow-cf-tunnel-upgrade-*) echo transient ;;
@@ -62,6 +65,7 @@ prop() {
       esac ;;
     UnitFileState)
       case $(kind "$u") in
+        restart_unit) echo "${MOCK_PODMAN_RESTART:-disabled}" ;;
         legacy) if [[ $(st legacy_enabled) == 1 ]]; then echo enabled; else echo disabled; fi ;;
         quadlet) loaded "$u" && echo generated ;;
       esac ;;

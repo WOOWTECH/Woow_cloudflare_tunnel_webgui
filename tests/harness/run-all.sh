@@ -56,6 +56,20 @@ expect() {
 expect migrate happy direct 'phase=committed'
 expect migrate happy swap 'phase=committed'
 expect migrate openclaw direct 'phase=committed' 'auth_active=1' 'new_active=1'
+# the legacy rollback model (STANDARD 7a). openclaw has podman-restart.service enabled, but
+# cf-tunnel-webgui is unless-stopped there, which that unit's filter never matches: the swap
+# must leave the container alone, exactly as it did before this shape existed.
+expect migrate openclaw direct 'rollback shape: rename' 'legacy_container=present .*capture=0' 'phase=committed'
+# the same host with the policy at `always`: leaving a stopped container there would put a
+# second cloudflared on this tunnel and these host ports at the next boot, so the swap
+# captures it in preflight and removes it.
+expect migrate openclaw_always direct 'rollback shape: capture' 'phase=committed' \
+  'legacy_container=removed .*capture=1' 'removed the legacy container cf-tunnel-webgui'
+# ... and the rollback recreates it, with the restart policy podman cannot change afterwards,
+# before it starts the legacy unit again
+expect migrate openclaw_always postcommit_rollback 'ROLLED_BACK \(manual rollback' \
+  'recreated cf-tunnel-webgui' 'legacy_container=present legacy_policy=always' \
+  'legacy_active=1 legacy_enabled=1'
 # automatic rollbacks
 expect migrate never_ready direct 'ROLLED_BACK \(gate timeout.*readyConnections=0' \
   'legacy_active=1 legacy_enabled=1 new_active=0 auth_active=0 quadlet_files=\[\] legacy_unit_file=kept'

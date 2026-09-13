@@ -4,6 +4,10 @@
 # MOCK_SCENARIO=unhealthy: the new container never reports healthy.
 # MOCK_BAD_IMAGE=<ref>: a container running that image never becomes healthy.
 # MOCK_LEGACY_VOL: the legacy container's /data volume (default cf_data).
+# MOCK_LEGACY_POLICY: the legacy container's restart policy (default unless-stopped). With
+#   "always" AND podman-restart.service enabled (MOCK_PODMAN_RESTART in the systemctl mock),
+#   migrate-legacy.sh captures and removes the container instead of leaving it stopped, so
+#   this mock also answers the capture templates and replays a `podman create`.
 set -u
 S=${MOCK_STATE:?}
 echo "podman $*" >>"$S/calls.log"
@@ -46,14 +50,55 @@ case $cmd in
         exit ;;
     esac
     exit 0 ;;
+  rm)
+    for a in "$@"; do
+      [[ $a == -* ]] && continue
+      [[ $a == cf-tunnel-webgui ]] || continue
+      [[ -e $S/legacy_container ]] || { echo "Error: no such container $a" >&2; exit 1; }
+      rm -f "$S/legacy_container"
+      echo 0 >"$S/legacy_active"
+    done
+    exit 0 ;;
+  create)
+    # the rollback's ql_recreate_container replay: record the policy it re-adds and bring
+    # the legacy container object back, stopped
+    pol=''
+    for a in "$@"; do case $a in --restart=*) pol=${a#--restart=} ;; esac; done
+    [[ -e $S/legacy_container ]] && { echo "Error: container name is already in use" >&2; exit 125; }
+    printf '%s' "${pol:-no}" >"$S/legacy_policy"
+    touch "$S/legacy_container"
+    echo 0 >"$S/legacy_active"
+    echo shimid-cf-tunnel-webgui
+    exit 0 ;;
   inspect)
-    fmt=''
-    if [[ ${1:-} == -f || ${1:-} == --format ]]; then fmt=$2; shift 2; fi
+    fmt='' iargs=()
+    while (($#)); do
+      case $1 in
+        -f | --format) fmt=$2; shift 2 ;;
+        --size) shift ;;
+        *) iargs+=("$1"); shift ;;
+      esac
+    done
+    set -- "${iargs[@]:-}"
     name=${1:-}
     case $name in
       cf-tunnel-webgui)
         [[ -e $S/legacy_container ]] || exit 125
+        pol=$(st legacy_policy "${MOCK_LEGACY_POLICY:-unless-stopped}")
         case $fmt in
+          # ---- the templates quadlet-lib's capture / recreate helpers use ----------------
+          *MaximumRetryCount*) printf 'cid-legacy|sha256:legacyimg|%s|%s|0||false|host|||\n' "$LEGACY_IMAGE" "$pol" ;;
+          *CreateCommand*)
+            printf '%s\0' /usr/bin/podman run --name cf-tunnel-webgui -d --network=host \
+              --restart "$pol" -v "${MOCK_LEGACY_VOL:-cf_data}:/data" "$LEGACY_IMAGE"
+            echo ;;
+          *Propagation*) printf 'volume|%s|/vol/%s|/data|true|rprivate\n' "${MOCK_LEGACY_VOL:-cf_data}" "${MOCK_LEGACY_VOL:-cf_data}" ;;
+          *Aliases* | *NetworkSettings.Networks* | *NetworkSettings.Ports*) ;;
+          *"range \$k"*) ;; # the label template; the $k is Go template text, not a shell expansion
+          *SizeRw*) echo 777260 ;;
+          *RestartPolicy.Name*) echo "$pol" ;;
+          *Config.Image*) echo "$LEGACY_IMAGE" ;;
+          # ---- what migrate-legacy.sh itself reads ---------------------------------------
           *Mounts*) echo "${MOCK_LEGACY_VOL:-cf_data}" ;;
           *State.Running*) if [[ $(st legacy_active) == 1 ]]; then echo true; else echo false; fi ;;
           *ImageName*) echo "$LEGACY_IMAGE" ;;

@@ -10,7 +10,8 @@
 #   scripts/migrate-legacy.sh preflight [--allow-dirty] [--with-auth] [--image REF]
 #       1. install.sh --stage: build the image while the legacy unit keeps serving, render
 #       2. read-only checks (access path, rescue path, legacy health, staged units)
-#       3. podman volume export of the data volume, legacy unit/config/inspect/image copies
+#       3. podman volume export of the data volume, legacy unit/config/inspect/image copies,
+#          and - where the legacy container would be revived at boot - its rollback capture
 #       4. baseline: every public hostname's HTTP code, the config version, the connection
 #          count and the hostname map. Prints RUN (~/.local/state/woow-cf-tunnel/migrate-*)
 #   scripts/migrate-legacy.sh swap [RUN]        start the detached watchdog; returns at once
@@ -20,8 +21,20 @@
 #   scripts/migrate-legacy.sh --rollback [RUN]  manual rollback when no watchdog runs
 # RUN defaults to the newest run. Every command also accepts the --command form.
 #
+# Rollback shape (STANDARD 7a): the swap does not rename the legacy container - the Quadlet
+# container has another name - it only stops it and disables its unit. That keeps a rollback
+# only while nothing starts it again. The user unit podman-restart.service runs
+# `podman start --all --filter restart-policy=always` at boot, so where it is enabled AND the
+# legacy container's restart policy is exactly `always`, the next reboot brings a second
+# cloudflared up on the same tunnel token, the same /data volume and the same host ports.
+# podman 4.9.3 cannot change a restart policy afterwards, so preflight then captures the
+# container (before any downtime) and the swap removes it; every rollback path recreates it
+# with ql_recreate_container before it starts the legacy unit. ql_rollback_strategy asks this
+# host's real state, never its name, and preflight prints which shape applies.
+#
 # Watchdog: re-check the legacy tunnel -> install the staged units -> stop and disable the
-# legacy unit (its file is kept) -> start woow-cf-tunnel.service -> within GATE_TIMEOUT
+# legacy unit (its file is kept, and the container itself either stays stopped or is removed
+# after its capture) -> start woow-cf-tunnel.service -> within GATE_TIMEOUT
 # (180s): unit active, GUI /api/health 200, EXPECT_CONNS (4) edge connections, config
 # version and hostname map unchanged, podman health "healthy", every public hostname
 # returns its baseline code -> soak SOAK_SECONDS (600s): no restart, no inactive unit,
@@ -51,7 +64,7 @@ QUADLET_DIR=${QL_QUADLET_DIR:-$HOME/.config/containers/systemd}
 ENV_FILE=$HOME/.config/$CF_APP/$CF_APP.env
 PREFIX=migrate
 
-usage() { sed -n '2,33p' "$0"; exit 64; }
+usage() { sed -n '2,46p' "$0"; exit 64; }
 run_arg() {
   local r=${1:-}
   [[ -n $r ]] || r=$(cf_latest_run "$PREFIX")
@@ -129,6 +142,11 @@ cmd_preflight() {
   check "no woow-cf-tunnel Quadlet file installed yet" none_installed
   check "systemd-run available" command -v systemd-run
   check "linger enabled" test "$(loginctl show-user "${USER:-$(id -un)}" -p Linger --value 2>/dev/null)" = yes
+  # How the legacy container is kept for a rollback. The swap never renames it - the new
+  # Quadlet container has another name - so on a host where podman-restart.service would
+  # revive it at boot it has to be captured and removed instead (STANDARD 7a).
+  LEGACY_STRATEGY=$(ql_rollback_strategy "$LEGACY_CONTAINER")
+  echo "  rollback shape: $LEGACY_STRATEGY ($LEGACY_CONTAINER restart-policy=$(ql_container_restart_policy "$LEGACY_CONTAINER"), podman-restart.service $(systemctl --user is-enabled podman-restart.service 2>/dev/null || echo disabled))"
   ((problems == 0)) || { echo "preflight: $problems problem(s); nothing was changed."; return 1; }
 
   local run stamp bdir tarball
@@ -145,6 +163,11 @@ cmd_preflight() {
       podman inspect "$LEGACY_CONTAINER" >"$bdir/legacy-container.inspect.json" &&
       systemctl --user cat "$LEGACY_UNIT" >"$bdir/legacy-unit.cat"
   ) || { echo "  FAIL  backup of the legacy unit and container"; return 1; }
+  if [[ $LEGACY_STRATEGY == capture ]]; then
+    cf_legacy_capture "$bdir" "$LEGACY_CONTAINER" \
+      || { echo "  FAIL  capturing $LEGACY_CONTAINER for the rollback"; return 1; }
+    echo "  rollback copy: $bdir/legacy-container/$LEGACY_CONTAINER (the swap removes the live container; --rollback recreates it)"
+  fi
   legacy_img=$(podman inspect -f '{{.ImageName}}' "$LEGACY_CONTAINER" 2>/dev/null)
   if [[ $SAVE_LEGACY_IMAGE == 1 && -n $legacy_img ]]; then
     (umask 077 && podman save -o "$bdir/legacy-image.tar" "$legacy_img") || { echo "  FAIL  podman save $legacy_img"; return 1; }
@@ -158,7 +181,7 @@ cmd_preflight() {
   # shellcheck disable=SC2034 # recorded in run.env for the watchdog
   BACKUP_DIR=$bdir LEGACY_VOLUME=$legacy_vol LEGACY_IMAGE=$legacy_img STAGED_IMAGE=$staged_img
   cf_write_run_env "$run" LEGACY_UNIT LEGACY_CONTAINER LEGACY_GUI_PORT LEGACY_READY_TIMEOUT QUADLET_DIR \
-    STAGE_DIR BACKUP_DIR LEGACY_VOLUME LEGACY_IMAGE STAGED_IMAGE \
+    STAGE_DIR BACKUP_DIR LEGACY_VOLUME LEGACY_IMAGE STAGED_IMAGE LEGACY_STRATEGY \
     BASELINE_TUNNEL BASELINE_VERSION BASELINE_INGRESS_SHA
   cp -a "$STAGE_DIR" "$run/staged"
   cf_freeze "$run" "$HERE/migrate-legacy.sh"
@@ -191,6 +214,7 @@ rollback() {
   while IFS= read -r f; do [[ $f == config/* ]] || rm -f "$QUADLET_DIR/$f"; done < <(staged_names)
   systemctl --user daemon-reload
   systemctl --user reset-failed "$NEW_UNIT" 2>/dev/null
+  cf_legacy_restore "${BACKUP_DIR:-}" "$LEGACY_CONTAINER" || true
   systemctl --user enable "$LEGACY_UNIT"
   systemctl --user start "$LEGACY_UNIT"
   deadline=$(($(date +%s) + LEGACY_READY_TIMEOUT))
@@ -255,6 +279,14 @@ cmd_watchdog() {
     sleep 1
     waited=$((waited + 1))
   done
+
+  # The legacy container is stopped and its unit disabled. On a host where
+  # podman-restart.service would start it again at boot (policy `always`), leaving it there
+  # would put a second cloudflared on this tunnel and these host ports after the next reboot,
+  # so it goes away now and the rollback recreates it from the capture taken in preflight.
+  if [[ ${LEGACY_STRATEGY:-rename} == capture ]]; then
+    cf_legacy_remove "$BACKUP_DIR" "$LEGACY_CONTAINER" || rollback "removing the legacy container failed"
+  fi
 
   cf_phase starting_new
   # shellcheck disable=SC2086 # EXTRA_UNITS is a word list

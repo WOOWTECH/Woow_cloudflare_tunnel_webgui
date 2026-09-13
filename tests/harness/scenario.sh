@@ -10,7 +10,12 @@
 #   scenario.sh upgrade <scenario> <mode>   modes: direct swap
 # Scenarios pick the mock behaviour: happy, never_ready, version_changed, public_mismatch,
 # unhealthy, broken_config, legacy_unhealthy, tunnel_session, tailnet_session, openclaw,
-# bad_image, noop.
+# openclaw_always, bad_image, noop.
+#   openclaw         woowtechopenclaw as it is today: podman-restart.service enabled, but the
+#                    legacy container is unless-stopped, so the rename/leave-stopped shape is
+#                    still safe and the swap must behave exactly as before
+#   openclaw_always  the same host with the legacy container at restart-policy=always: the
+#                    swap must capture and remove it, and a rollback must recreate it
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=common.sh
@@ -39,6 +44,10 @@ report() {
   local q
   q=$(QDIR)
   printf '  phase=%s\n  result=%s\n' "$(cat "$RUN/PHASE" 2>/dev/null)" "$(cat "$RUN/RESULT" 2>/dev/null)"
+  printf '  legacy_container=%s legacy_policy=%s capture=%s\n' \
+    "$([[ -e $MOCK_STATE/legacy_container ]] && echo present || echo removed)" \
+    "$(cat "$MOCK_STATE/legacy_policy" 2>/dev/null || echo "${MOCK_LEGACY_POLICY:-unless-stopped}")" \
+    "$(find "$HOME/backups" -path '*/legacy-container/cf-tunnel-webgui/meta' 2>/dev/null | wc -l)"
   printf '  end: legacy_active=%s legacy_enabled=%s new_active=%s auth_active=%s quadlet_files=[%s] legacy_unit_file=%s image=%s backups=%s\n' \
     "$(cat "$MOCK_STATE/legacy_active" 2>/dev/null || echo -)" \
     "$(cat "$MOCK_STATE/legacy_enabled" 2>/dev/null || echo -)" \
@@ -56,6 +65,7 @@ report() {
       "$(lbl "$(cat "$MOCK_STATE/running_image" 2>/dev/null)")" \
       "$(lbl "$(sed -n 's/^Image=//p' "$q/woow-cf-tunnel.container" 2>/dev/null)")"
   fi
+  grep -hE 'removed the legacy container|recreated ' "$RUN/watchdog.log" 2>/dev/null | sed 's/^/  log: /'
   grep -hE 'outage|waiting|ROLLBACK' "$RUN/watchdog.log" 2>/dev/null | head -n 3 | sed 's/^/  log: /'
 }
 
@@ -64,7 +74,7 @@ if [[ $kind == migrate ]]; then
   legacy_host
   env_file
   pf_args=(--allow-dirty)
-  if [[ $sc == openclaw ]]; then
+  if [[ $sc == openclaw || $sc == openclaw_always ]]; then
     # openclaw: persistent legacy container, GUI on 8888, compose-named volume, auth proxy
     # taking over the port the public hostname already points at
     export MOCK_PERSIST=1 MOCK_LEGACY_VOL=woow_cloudflare_tunnel_webgui_cf_data \
@@ -76,6 +86,10 @@ if [[ $kind == migrate ]]; then
       >"$HOME/.config/systemd/user/podman-cf-tunnel-webgui.service"
     echo 'correct-horse-battery' | bash "$R/scripts/auth-passwd.sh" admin >/dev/null
     pf_args+=(--with-auth)
+    # podman-restart.service is enabled on this host. Whether that matters depends on the
+    # legacy container's own restart policy, which is the only thing that differs here.
+    export MOCK_PODMAN_RESTART=enabled
+    [[ $sc == openclaw_always ]] && export MOCK_LEGACY_POLICY=always
   fi
   # Both of these arrive from 127.0.0.1 (tailscaled runs --tun=userspace-networking, so it
   # re-dials sshd over loopback just like cloudflared does): only the carrier tells them apart.
@@ -83,6 +97,7 @@ if [[ $kind == migrate ]]; then
   [[ $sc == tailnet_session ]] && export SSH_CONNECTION="127.0.0.1 55996 127.0.0.1 22" MOCK_SSH_CARRIER=tailscaled
   pf=$(bash "$R/scripts/migrate-legacy.sh" preflight "${pf_args[@]}" 2>&1)
   RUN=$(sed -n 's/^preflight OK. RUN=//p' <<<"$pf")
+  grep -E "rollback shape:|rollback copy:" <<<"$pf" | sed "s/^ *//;s/^/  /"
   if [[ -z $RUN ]]; then
     echo "  preflight refused"
     grep -E 'FAIL|problem|ERROR' <<<"$pf" | head -n 4 | sed 's/^/    /'

@@ -427,3 +427,64 @@ cf_status() {
   echo "result: $(cat "$run/RESULT" 2>/dev/null || echo '<running or not started>')"
   tail -n 25 "$run/watchdog.log" 2>/dev/null
 }
+
+# ---- the legacy rollback model (STANDARD 7a; quadlet-lib >= 1.4.0) -------------------------
+# The swap does not rename the legacy container: the new Quadlet container has a different
+# name, so it simply leaves the legacy one stopped, with its unit disabled but kept. That is
+# a rollback path only while nothing starts the container again. The user unit
+# podman-restart.service runs `podman start --all --filter restart-policy=always` at boot, so
+# where it is enabled and the legacy container's policy is exactly `always`, a reboot brings
+# a second cloudflared up on the same tunnel token, the same `/data` volume and the same host
+# ports (the legacy container is --network=host) next to the Quadlet one. podman 4.9.3 cannot
+# change a restart policy afterwards, so there the container is captured and removed instead,
+# and the rollback recreates it before it starts the legacy unit. ql_rollback_strategy asks
+# this host's real state, never its name.
+
+# cf_legacy_capture <backup dir> <container>: write the rollback copy. Read-only towards the
+# container, so preflight runs it while the legacy tunnel still serves: a container the
+# library cannot replay (an empty CreateCommand - created through the podman API rather than
+# the CLI) is refused there, not in the middle of the swap. No --commit: the GUI keeps its
+# settings, its tunnel token and its credentials in the /data volume, and the live container's
+# writable layer is __pycache__ only.
+cf_legacy_capture() {
+  local bk=${1:?usage: cf_legacy_capture <backup dir> <container>} c=${2:?} meta
+  meta=$bk/legacy-container/$c/meta
+  if [[ -f $meta ]]; then
+    ql_info "the rollback copy of $c is already in $bk/legacy-container/$c"
+  else
+    ql_capture_container "$c" "$bk" >/dev/null
+  fi
+  [[ $(sed -n 's/^RECREATABLE=//p' "$meta" | tail -n1) == 1 ]] || ql_die \
+    "$c was created through the podman API, not the CLI, so its create command cannot be replayed and a capture-based rollback is impossible. Either disable podman-restart.service (then the legacy container can simply be left stopped) or plan to rebuild $c by hand from $bk/legacy-container/$c/inspect.json"
+}
+
+# cf_legacy_remove <backup dir> <container>: the capture path's half of the swap. Returns 1
+# rather than dying, because inside the watchdog a failure has to roll back.
+cf_legacy_remove() {
+  local bk=${1:?} c=${2:?}
+  if [[ ! -f $bk/legacy-container/$c/meta ]]; then
+    cf_log "no rollback copy of $c in $bk; refusing to remove it"
+    return 1
+  fi
+  # A plain rm on purpose: `podman rm -v` would delete the anonymous volumes the capture
+  # records and expects to find again.
+  podman rm "$c" >/dev/null 2>&1 || { cf_log "podman rm $c failed"; return 1; }
+  cf_log "removed the legacy container $c; the rollback recreates it from $bk/legacy-container/$c"
+}
+
+# cf_legacy_restore <backup dir> <container>: make sure the legacy container exists again
+# before its unit is started. A no-op on the path that only left it stopped.
+cf_legacy_restore() {
+  local bk=${1:-} c=${2:?}
+  if podman container exists "$c" >/dev/null 2>&1; then return 0; fi
+  if [[ -n $bk && -f $bk/legacy-container/$c/meta ]]; then
+    if ql_recreate_container "$bk" "$c" >/dev/null; then
+      cf_log "recreated $c from $bk/legacy-container/$c (stopped, with its original restart policy)"
+      return 0
+    fi
+    cf_log "could not recreate $c from $bk/legacy-container/$c; $LEGACY_UNIT will fail to start"
+    return 1
+  fi
+  cf_log "the legacy container $c does not exist and there is no rollback copy in ${bk:-<none>}"
+  return 1
+}
