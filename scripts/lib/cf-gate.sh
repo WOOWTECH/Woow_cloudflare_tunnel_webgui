@@ -132,17 +132,73 @@ cf_serve_tcp_ports() {
   podman exec "$1" sh -c 'tailscale serve status --json 2>/dev/null' 2>/dev/null | cf_json_tcp_ports
 }
 
-# cf_rescue_ssh_ok <container>: true when that container actually serves TCP :22 on the
-# tailnet. Explains what it did see on stdout when it does not.
+# cf_shields_up <container>: "true"/"false" from that node's prefs, empty if unreadable.
+# ShieldsUp is the switch that drops ALL inbound tailnet connections; with it off, a node accepts
+# them and hands them to the host.
+cf_shields_up() {
+  podman exec "$1" sh -c 'tailscale debug prefs 2>/dev/null' 2>/dev/null | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+v = d.get("ShieldsUp")
+print("true" if v is True else "false" if v is False else "")'
+}
+
+# cf_host_ssh_listener: the first local address sshd listens on, empty if nothing does. Read on
+# the HOST, not in a container - the tailnet node hands the connection to the host's own stack.
+cf_host_ssh_listener() {
+  ss -lntH 'sport = :22' 2>/dev/null | awk '{print $4}' | head -1
+}
+
+# cf_rescue_ssh_ok <container>: true when :22 on that node's tailnet address really reaches this
+# host's sshd. Explains what it saw on stdout when it cannot show that.
+#
+# There are TWO ways that is true, and an earlier version of this function knew only the first,
+# which made it refuse a path that demonstrably works:
+#
+#   1. an explicit `tailscale serve --tcp 22` rule, or
+#   2. nothing at all - because a tailnet node hands an inbound connection for port N to the host
+#      on port N whenever ShieldsUp is off. That is true in BOTH networking modes: with a TUN
+#      interface the tailnet IP is on the host's own stack, and in userspace mode tailscaled
+#      dials localhost:N itself. `serve` exists to publish a port under TLS or to remap it, not
+#      to make an already-listening host port reachable.
+#
+# The old text asserted the opposite ("with userspace networking the tailnet IP cannot reach an
+# unserved host port"). It is wrong: on woowtechopenclaw both tailnet nodes are userspace-mode
+# with no `:22` serve rule, and ssh to either node's tailnet IP reaches the host's sshd.
+#
+# What this still CANNOT see is the tailnet ACL, which can deny :22 no matter what the node does.
+# So case 2 is strong evidence, not proof, and it says so. The only proof is a login you have
+# actually made - which is what RESCUE_PROOF=lan|console are for.
 cf_rescue_ssh_ok() {
-  local c=$1 ports
+  local c=$1 ports shields listener
   ports=$(cf_serve_tcp_ports "$c") || {
     echo "        could not read \`tailscale serve status --json\` in $c: this is not a demonstrated rescue path"
     return 1
   }
-  if [[ -n $ports ]] && grep -qx 22 <<<"$ports"; then return 0; fi
-  echo "        $c serves TCP ${ports:-<none>} - :22 is NOT served. With userspace networking the tailnet IP cannot reach an unserved host port, so this is not a way back in after the swap."
-  echo "        Fix it (tailscale serve --bg --tcp 22 tcp://localhost:22) or, if you have a LAN route or a physical console, re-run with RESCUE_PROOF=lan / RESCUE_PROOF=console."
+  if [[ -n $ports ]] && grep -qx 22 <<<"$ports"; then
+    echo "        $c serves TCP :22 explicitly"
+    return 0
+  fi
+
+  shields=$(cf_shields_up "$c")
+  listener=$(cf_host_ssh_listener)
+  if [[ $shields == false && -n $listener ]]; then
+    echo "        $c serves TCP ${ports:-<none>} - no :22 rule, and none is needed: ShieldsUp is off"
+    echo "        and this host's sshd listens on $listener, so the node hands an inbound :22 to it."
+    echo "        NOTE this does not prove the tailnet ACL permits :22 - confirm with a real login"
+    echo "        over that node before relying on it."
+    return 0
+  fi
+
+  echo "        $c serves TCP ${ports:-<none>} - :22 is not served, and the fallback path is not demonstrable either:"
+  [[ $shields == true ]] && echo "          ShieldsUp is ON, so this node drops all inbound tailnet connections"
+  [[ -z $shields ]] && echo "          could not read ShieldsUp from this node's prefs"
+  [[ -z $listener ]] && echo "          nothing on this host is listening on :22"
+  echo "        Fix it (tailscale serve --bg --tcp 22 tcp://localhost:22, or turn ShieldsUp off, or"
+  echo "        start sshd) or, if you have a LAN route or a physical console, re-run with"
+  echo "        RESCUE_PROOF=lan / RESCUE_PROOF=console."
   return 1
 }
 

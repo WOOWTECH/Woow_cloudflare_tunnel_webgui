@@ -241,13 +241,21 @@ authentication — read [Security](#security) before you expose it.
 
 ### Preflight refusals you may meet on an unfamiliar host
 
-- **"rescue path: … does not demonstrably serve TCP :22 on the tailnet".** A running rescue
-  container is not a second way in. Preflight execs `tailscale serve status --json` in
-  `RESCUE_CONTAINER` and requires a TCP forward for `:22`; it prints the ports it did see. With
-  userspace networking the tailnet IP cannot reach an unserved host port, so a container that serves
-  only 443/8443/… is no rescue at all. Fix it (`tailscale serve --bg --tcp 22 tcp://localhost:22`)
-  or, if you have a LAN route or a physical console, pass `RESCUE_PROOF=lan` / `RESCUE_PROOF=console`
-  deliberately.
+- **"rescue path: … is not demonstrable".** A *running* rescue container is not a second way in, so
+  preflight asks how `:22` would actually be reached through `RESCUE_CONTAINER`. It accepts two
+  answers. Either the node carries an explicit `tailscale serve --tcp 22` rule, **or** it has
+  `ShieldsUp` off while this host has something listening on `:22` — because a tailnet node hands
+  an inbound connection for port N to the host on port N whenever inbound is not shielded. That is
+  true in both networking modes: with a TUN interface the tailnet IP is on the host's own stack,
+  and in userspace mode `tailscaled` dials `localhost:N` itself. `serve` publishes a port under TLS
+  or remaps it; it is not what makes an already-listening host port reachable.
+  (An earlier version of this section claimed the opposite — that an unserved port is unreachable
+  under userspace networking. It is wrong: on woowtechopenclaw both tailnet nodes are userspace-mode
+  with no `:22` rule, and ssh to either node's tailnet IP reaches the host's sshd.)
+  Neither answer can see the tailnet **ACL**, which may deny `:22` regardless, so preflight prints
+  the evidence it used and says so. The only real proof is a login you have made yourself — that is
+  what `RESCUE_PROOF=lan` / `RESCUE_PROOF=console` are for. It refuses when `ShieldsUp` is on, when
+  nothing listens on `:22`, or when the node's prefs cannot be read at all.
 - **"`<unit>` is not a loaded user unit".** Preflight lists the user units whose `Exec*` lines name
   `LEGACY_CONTAINER` and suggests one; set `LEGACY_UNIT=` to it.
 - **"legacy GUI does not answer on 127.0.0.1:`<port>`".** `LEGACY_GUI_PORT` defaults to the *staged*
