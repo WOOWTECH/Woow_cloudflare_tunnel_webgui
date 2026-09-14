@@ -249,7 +249,9 @@ tests/            dryrun.sh（含 dryrun.local.sh）、smoke.sh、harness/、pyt
 ```
 
 `scripts/lib/quadlet-lib.sh` 是 WOOWTECH 共用的 Quadlet 函式庫，原封不動 vendored 進來，
-CI 會比對雜湊（決策 D8）。請勿在這裡修改它。
+CI 會比對雜湊（決策 D8）。請勿在這裡修改它。`scripts/lib/quadlet-lib.versions` 是已發布
+`(版本, sha256)` 對照的正式帳本，`tests/lib-version.sh` 會拿 vendored 的函式庫去對它：
+單靠 manifest 只能證明檔案複製過來之後沒被改過，無法證明它到底是哪一個版本。
 
 ## 測試
 

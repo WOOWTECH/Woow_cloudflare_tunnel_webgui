@@ -1,0 +1,21 @@
+# quadlet-lib version ledger.
+#
+# One line per (version, content) pair that has ever left this tree:
+#
+#   <version>  <sha256 of quadlet-lib.sh>  <status>   # note
+#
+#   released   this content IS that version. Exactly one released line per version.
+#   withdrawn  that version number was published with more than one content, so it no longer
+#              identifies anything. Every copy claiming it must be re-synced.
+#
+# Append-only. Bump QL_LIB_VERSION and run `lib/sync-lib.sh --register` in the same change:
+# sync-lib.sh refuses to run at all when the canonical file's own (version, content) pair is
+# not recorded here as released, and refuses to register a second content under a version
+# that already has one. Repo CI (.github/workflows/quadlet-ci.yml) runs the same check against
+# the vendored copy and its vendored `scripts/lib/quadlet-lib.versions`, so a copy that claims
+# a version it is not fails there instead of passing a self-referential manifest check.
+#
+1.6.0  5a540b5024c56f0b05886e0e4261da04013e92483161fc85ce290b660644a467  released   # what all 13 other repos still vendor on main
+1.7.0  4d78e173e706871e44fab58d1887e519e72b18d7c0d5cd774f7fbb4b45d7b80b  withdrawn  # vendored into Woow_podman_nginxpm / Woow_podman_vpn_tailscale_package / Woow_cloudflare_tunnel_webgui on p6-host-tree-mismatch
+1.7.0  882a46cbdfb5add6570d005cbcb885906ff286dfce4843de311414b71a8fabcf  withdrawn  # canonical only: gained ql_require_healthcheck_timers, ql_stop_healthcheck_timer and the active ql_wait_container_healthy AFTER the line above was vendored
+1.8.0  1d50ecbbf77ed9da40fad5644d1731901003379a8eca6b0e3e87f0ab0b847018  released   # the content that was canonical-1.7.0, released under a number of its own

@@ -299,7 +299,10 @@ tests/            dryrun.sh (+ dryrun.local.sh), smoke.sh, harness/, pytest suit
 ```
 
 `scripts/lib/quadlet-lib.sh` is the shared WOOWTECH Quadlet library, vendored unmodified and
-checksummed in CI (decision D8). Do not edit it here.
+checksummed in CI (decision D8). Do not edit it here. `scripts/lib/quadlet-lib.versions` is the
+canonical ledger of released `(version, sha256)` pairs, and `tests/lib-version.sh` checks the
+vendored lib against it: the manifest alone only proves the file was not edited after it was
+copied here, never which version it actually is.
 
 ## Testing
 

@@ -28,8 +28,13 @@
 #   QL_LOCK_GRACE       seconds before a lock with no owner file is stale (30); see ql_lock
 #   QL_LOG_PREFIX       log prefix                   (basename of $0)
 
+# The version is an identity, not a label: every released (version, content) pair is recorded
+# in lib/VERSIONS, and both sync-lib.sh and repo CI refuse a copy whose content is not the
+# content that was released under the version it declares. Bump this line and run
+# `lib/sync-lib.sh --register` in the same change; never edit this file and keep the number.
+# 1.7.0 is WITHDRAWN: two different files were released under it (see lib/VERSIONS).
 # shellcheck disable=SC2034 # public: read by sync-lib.sh, repo scripts and CI
-QL_LIB_VERSION="1.7.0"
+QL_LIB_VERSION="1.8.0"
 
 # ---------------------------------------------------------------------------------------
 # logging
@@ -260,12 +265,42 @@ ql_require_user_systemd() {
   return 0
 }
 
-# ql_preflight <min-podman-version>: rootless + podman version + quadlet + user systemd
+# ql_require_healthcheck_timers: warn when podman will not be able to create healthcheck
+# timers. podman does NOT use D-Bus for them: it dials systemd's private socket
+# /run/user/<uid>/systemd/private directly. That socket file can outlive its listener (it did
+# on openclaw from 2026-08-28 to 2026-09-14): podman then logs "unable to get systemd
+# connection to add healthchecks" to stderr and starts the container anyway, with no periodic
+# check at all. Health status freezes at whatever it reached, HealthOnFailure= never fires,
+# and a passive health wait hangs. The fix is `systemctl --user daemon-reexec` - daemon-reload
+# is NOT enough. Warn only: the condition breaks health monitoring, not the install itself.
+# QL_SD_PRIVATE overrides the socket path (tests).
+ql_require_healthcheck_timers() {
+  local sock=${QL_SD_PRIVATE:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/systemd/private}
+  local remedy="podman creates healthcheck timers over this socket; without it health status freezes and HealthOnFailure= never fires. Fix as this user: systemctl --user daemon-reexec   (daemon-reload is NOT enough)"
+  if [[ ! -S $sock ]]; then
+    ql_warn "systemd private socket $sock is missing. $remedy"
+    return 0
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    if [[ -z $(ss -H -l -x src "$sock" 2>/dev/null) ]]; then
+      ql_warn "nothing is listening on $sock (orphaned socket file). $remedy"
+      return 0
+    fi
+    ql_info "systemd private socket is live (healthcheck timers can be created)"
+    return 0
+  fi
+  ql_info "systemd private socket $sock exists (no ss(8) here, so its listener was not verified)"
+  return 0
+}
+
+# ql_preflight <min-podman-version>: rootless + podman version + quadlet + user systemd +
+# a live systemd private socket (healthcheck timers)
 ql_preflight() {
   ql_require_rootless
   ql_require_podman_min "${1:-4.9}"
   ql_require_quadlet
   ql_require_user_systemd
+  ql_require_healthcheck_timers
 }
 
 # ql_enable_linger: idempotent. Dies (after printing the sudo command) if polkit refuses,
@@ -2120,9 +2155,16 @@ ql_wait_until() {
 }
 
 # ql_wait_container_healthy <name> <timeout_s>
-#   With a HealthCmd: until podman reports "healthy" (QL_HEALTH_ACTIVE=1 additionally runs
-#   `podman healthcheck run` each poll; note manual runs count toward HealthOnFailure).
-#   Without one: until it has been running with the same StartedAt for QL_WAIT_STABLE_S (5).
+#   With a HealthCmd: until podman reports "healthy". Each poll ALSO runs
+#   `podman healthcheck run` itself (active check), because a passive wait on
+#   .State.Health.Status hangs forever on any host where the periodic healthcheck timer was
+#   never created - podman dials systemd's private socket to create that timer, logs a
+#   warning to stderr when it cannot, and starts the container anyway. That is exactly what
+#   froze every health status on openclaw for 2.5 weeks and what auto-rolled-back the first
+#   Quadlet cutover window. Set QL_HEALTH_ACTIVE=0 to opt OUT (purely passive) on a host
+#   where HealthOnFailure= counting matters: a manual run counts toward the failure streak.
+#   Without a HealthCmd: until it has been running with the same StartedAt for
+#   QL_WAIT_STABLE_S (5).
 ql_wait_container_healthy() {
   local name=${1:?usage: ql_wait_container_healthy <name> <timeout_s>} timeout=${2:?usage: ql_wait_container_healthy <name> <timeout_s>}
   local deadline=$((SECONDS + timeout)) info st hc health started since=$SECONDS first='<none>' last=''
@@ -2134,7 +2176,7 @@ ql_wait_container_healthy() {
     if [[ $st == running ]]; then
       if [[ -n $hc ]]; then
         if [[ $health == healthy ]]; then ql_info "$name is healthy"; return 0; fi
-        if [[ ${QL_HEALTH_ACTIVE:-0} == 1 ]] && podman healthcheck run "$name" >/dev/null 2>&1; then
+        if [[ ${QL_HEALTH_ACTIVE:-1} == 1 ]] && podman healthcheck run "$name" >/dev/null 2>&1; then
           ql_info "$name is healthy (active check)"
           return 0
         fi
@@ -2150,6 +2192,34 @@ ql_wait_container_healthy() {
       return 1
     fi
     sleep "${QL_POLL_INTERVAL:-2}"
+  done
+}
+
+# ql_stop_healthcheck_timer <container>...: stop the transient podman healthcheck timer of a
+#   container that is being retired (renamed, stopped-but-kept, or about to be removed).
+#   podman keys that timer on the container ID, not on its name, so a rename does NOT detach
+#   it: it keeps firing `podman healthcheck run <id>` every interval against a container that
+#   is no longer running, and the transient <id>.service then fails. STANDARD.md makes an
+#   empty `systemctl --user --failed` the cutover gate, so one renamed legacy container is
+#   enough to keep a soak red forever. Best effort by design: a container with no healthcheck
+#   (or on a host where the timer was never created) has no units to stop, which is not an
+#   error. Call it BEFORE `podman rename`/`podman rm` while the name still resolves.
+ql_stop_healthcheck_timer() {
+  local c id
+  for c in "$@"; do
+    id=$(podman inspect --format '{{.Id}}' "$c" 2>/dev/null | head -n1) || id=''
+    # the id goes into systemctl's argv, so accept only what a real container id looks like
+    if [[ ! $id =~ ^[0-9a-f]{12,64}$ ]]; then
+      ql_warn "cannot resolve the container id of $c (got '${id:-}'); leaving any healthcheck timer alone"
+      continue
+    fi
+    if _ql_dry; then
+      ql_info "[dry-run] would run: systemctl --user stop $id.timer $id.service"
+      continue
+    fi
+    _ql_sc stop "$id.timer" "$id.service" >/dev/null 2>&1 || true
+    _ql_sc reset-failed "$id.timer" "$id.service" >/dev/null 2>&1 || true
+    ql_info "stopped the healthcheck timer of $c (${id:0:12})"
   done
 }
 
