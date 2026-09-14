@@ -29,7 +29,7 @@
 #   QL_LOG_PREFIX       log prefix                   (basename of $0)
 
 # shellcheck disable=SC2034 # public: read by sync-lib.sh, repo scripts and CI
-QL_LIB_VERSION="1.6.0"
+QL_LIB_VERSION="1.7.0"
 
 # ---------------------------------------------------------------------------------------
 # logging
@@ -202,6 +202,30 @@ ql_require_rootless() {
   [[ $(id -u) != 0 ]] || ql_die "run this as the normal user that owns the containers, not as root or via sudo (rootless podman + systemd --user)"
   [[ -n ${XDG_RUNTIME_DIR:-} ]] || ql_warn "XDG_RUNTIME_DIR is not set; systemctl --user will fail (log in via ssh/console, or: export XDG_RUNTIME_DIR=/run/user/$(id -u))"
   return 0
+}
+
+# ql_require_own_lineage <dir> [<repo>]: refuse to run a package script out of a host's
+# pre-Quadlet deployment tree.
+#
+# Several WOOWTECH hosts (woowtechopenclaw above all) run a stack from a directory that was
+# hand-copied, never a git repo, and has drifted from the package it came from: NPM's
+# `nginx-proxy-manager.service` has `ExecStart=%h/Woow_podman_nginxpm/scripts/deploy.sh`,
+# and that tree's `scripts/lib/` holds npm_api.py / check_empty_db.py, not quadlet-lib.sh.
+# An operator who cds into the directory whose NAME matches the repo and runs
+# `scripts/migrate-legacy.sh` there is running a script from a different lineage over a
+# deployment this package cannot adopt. Two markers say so:
+#   - a `.deployed-commit` file at the top of the tree (what those deploy.sh scripts stamp)
+#   - `scripts/deploy.sh` with no `scripts/lib/quadlet-lib.sh` beside it
+# Deleting such a tree is NOT the fix either: live systemd units execute scripts out of it.
+ql_require_own_lineage() {
+  local dir=${1:?usage: ql_require_own_lineage <dir> [repo]} repo=${2:-WOOWTECH/<repo>} why=''
+  if [[ -f $dir/.deployed-commit ]]; then
+    why="it carries a .deployed-commit stamp"
+  elif [[ -f $dir/scripts/deploy.sh && ! -f $dir/scripts/lib/quadlet-lib.sh ]]; then
+    why="it has scripts/deploy.sh and no scripts/lib/quadlet-lib.sh"
+  fi
+  [[ -n $why ]] || return 0
+  ql_die "you are running this from the host's pre-Quadlet deployment tree ($dir: $why), which is not this package's lineage and is not a git repo - run from a fresh clone of $repo, and do not delete this tree: three live systemd units execute scripts from it"
 }
 
 # ql_require_podman_min <version>, e.g. ql_require_podman_min 4.9

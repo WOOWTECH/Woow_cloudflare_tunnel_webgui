@@ -239,6 +239,27 @@ about 777 kB of `__pycache__`. The container id and the IP/MAC lease are not pre
 (`git checkout compose-final`). Note that file published the GUI on `0.0.0.0:8888` with no
 authentication — read [Security](#security) before you expose it.
 
+### Preflight refusals you may meet on an unfamiliar host
+
+- **"rescue path: … does not demonstrably serve TCP :22 on the tailnet".** A running rescue
+  container is not a second way in. Preflight execs `tailscale serve status --json` in
+  `RESCUE_CONTAINER` and requires a TCP forward for `:22`; it prints the ports it did see. With
+  userspace networking the tailnet IP cannot reach an unserved host port, so a container that serves
+  only 443/8443/… is no rescue at all. Fix it (`tailscale serve --bg --tcp 22 tcp://localhost:22`)
+  or, if you have a LAN route or a physical console, pass `RESCUE_PROOF=lan` / `RESCUE_PROOF=console`
+  deliberately.
+- **"`<unit>` is not a loaded user unit".** Preflight lists the user units whose `Exec*` lines name
+  `LEGACY_CONTAINER` and suggests one; set `LEGACY_UNIT=` to it.
+- **"legacy GUI does not answer on 127.0.0.1:`<port>`".** `LEGACY_GUI_PORT` defaults to the *staged*
+  `UVICORN_PORT`. Preflight reads the legacy container's real `uvicorn --host/--port` and names it.
+- **"the legacy GUI binds `<addr>` but the staged unit hard-codes UVICORN_HOST=127.0.0.1".** The swap
+  would narrow a LAN-reachable GUI to loopback, and the tunnel checks cannot see it (the container is
+  `Network=host`). Set `UVICORN_HOST` in `quadlet/woow-cf-tunnel.container`, or acknowledge the
+  narrowing with `CF_ALLOW_BIND_NARROWING=1`.
+
+Running any script out of a host's pre-Quadlet deployment tree is refused outright
+(`ql_require_own_lineage`). `tests/host-tree.sh` pins all of this.
+
 ## Security
 
 - **The GUI has no login.** Anyone who reaches it can read your ingress configuration,

@@ -191,6 +191,27 @@ scripts/migrate-legacy.sh --rollback    # 清理前都還可以手動回滾
 請注意那份檔案把介面開在 `0.0.0.0:8888` 且沒有任何驗證，對外之前請先讀
 [安全性](#安全性)。
 
+### 在陌生主機上可能遇到的 preflight 拒絕
+
+- **「rescue path: … does not demonstrably serve TCP :22 on the tailnet」**：救援容器「在跑」
+  不等於有第二條路進得來。preflight 會在 `RESCUE_CONTAINER` 內執行
+  `tailscale serve status --json`，要求看到 `:22` 的 TCP forward，並印出實際看到的連接埠。
+  在 userspace networking 下，tailnet IP 無法連到沒有 serve 的主機連接埠，因此只 serve
+  443/8443/… 的容器根本不是救援路徑。請修好它
+  （`tailscale serve --bg --tcp 22 tcp://localhost:22`），或在確實有 LAN 或實體 console 時
+  明確傳入 `RESCUE_PROOF=lan` / `RESCUE_PROOF=console`。
+- **「`<unit>` is not a loaded user unit」**：preflight 會列出 `Exec*` 行提到
+  `LEGACY_CONTAINER` 的 user unit 並建議其中一個；用 `LEGACY_UNIT=` 指定。
+- **「legacy GUI does not answer on 127.0.0.1:`<port>`」**：`LEGACY_GUI_PORT` 預設取自
+  *staged* 的 `UVICORN_PORT`。preflight 會讀出 legacy 容器真正的 `uvicorn --host/--port`。
+- **「the legacy GUI binds `<addr>` but the staged unit hard-codes UVICORN_HOST=127.0.0.1」**：
+  swap 會把原本 LAN 可達的 GUI 收窄成只剩 loopback，而隧道檢查看不到這件事（容器是
+  `Network=host`）。請在 `quadlet/woow-cf-tunnel.container` 設定 `UVICORN_HOST`，或用
+  `CF_ALLOW_BIND_NARROWING=1` 明確接受收窄。
+
+在主機的 pre-Quadlet 部署樹裡執行本套件的任何腳本一律被拒絕（`ql_require_own_lineage`）。
+以上行為由 `tests/host-tree.sh` 固定。
+
 ## 安全性
 
 - **這個介面沒有登入機制。** 任何連得到它的人都能讀取 ingress 設定、替換 tunnel token，

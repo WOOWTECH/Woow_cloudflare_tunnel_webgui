@@ -98,6 +98,103 @@ cf_nrestarts() {
 }
 cf_port_busy() { [[ -n $(ss -ltnH "( sport = :$1 )" 2>/dev/null) ]]; }
 cf_health() { podman inspect -f '{{.State.Health.Status}}' "$NEW_CONTAINER" 2>/dev/null; }
+
+# ---- is there really a second way in? --------------------------------------------------------
+# The swap drops and re-establishes the tunnel that carries this host's ONLY published SSH
+# path, so preflight demands a rescue path. It used to demand only that RESCUE_CONTAINER is
+# `running`, which is not a rescue path: woowtechopenclaw's woow-tailscale-gateway is running
+# and serves TCP 18081/443/8443/9443/9444 - :22 is NOT among them - and because tailscaled
+# runs with TS_USERSPACE_NETWORKING the tailnet IP cannot reach a host port that is not
+# served. Setting RESCUE_CONTAINER to that gateway therefore turned the check green while the
+# host had no second way in at all. So the proof is the serve configuration, not the state.
+
+# cf_json_tcp_ports: stdin = `tailscale serve status --json`, stdout = its TCP ports, one per
+# line, numerically sorted. Empty (and status 1) when the input is not that JSON.
+cf_json_tcp_ports() {
+  python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.exit(1)
+tcp = d.get("TCP") or {}
+try:
+    ports = sorted(int(p) for p in tcp)
+except Exception:
+    sys.exit(1)
+for p in ports:
+    print(p)'
+}
+
+# cf_serve_tcp_ports <container>: the TCP ports that container serves on the tailnet.
+cf_serve_tcp_ports() {
+  podman exec "$1" sh -c 'tailscale serve status --json 2>/dev/null' 2>/dev/null | cf_json_tcp_ports
+}
+
+# cf_rescue_ssh_ok <container>: true when that container actually serves TCP :22 on the
+# tailnet. Explains what it did see on stdout when it does not.
+cf_rescue_ssh_ok() {
+  local c=$1 ports
+  ports=$(cf_serve_tcp_ports "$c") || {
+    echo "        could not read \`tailscale serve status --json\` in $c: this is not a demonstrated rescue path"
+    return 1
+  }
+  if [[ -n $ports ]] && grep -qx 22 <<<"$ports"; then return 0; fi
+  echo "        $c serves TCP ${ports:-<none>} - :22 is NOT served. With userspace networking the tailnet IP cannot reach an unserved host port, so this is not a way back in after the swap."
+  echo "        Fix it (tailscale serve --bg --tcp 22 tcp://localhost:22) or, if you have a LAN route or a physical console, re-run with RESCUE_PROOF=lan / RESCUE_PROOF=console."
+  return 1
+}
+
+# ---- what the legacy deployment actually looks like -------------------------------------------
+# openclaw's unit is `podman-cf-tunnel-webgui.service`, not `cf-tunnel-webgui.service`, and its
+# uvicorn is `--host 0.0.0.0 --port 8888`, not the repo's 18000. Preflight refused on all three
+# - correctly - but with messages that read as "the service is broken". These name the real
+# values instead.
+
+# cf_units_mentioning <container>: user units whose Exec* lines name that container.
+cf_units_mentioning() {
+  local d=${CF_USER_UNIT_DIR:-$HOME/.config/systemd/user} f
+  [[ -d $d ]] || return 0
+  for f in "$d"/*.service; do
+    [[ -f $f ]] || continue
+    if grep -qE "^[[:space:]]*Exec[A-Za-z]*=.*[[:space:]]$1([[:space:]]|\$)" "$f"; then
+      printf '%s\n' "${f##*/}"
+    fi
+  done
+  return 0
+}
+
+# cf_uvicorn_args_parse: stdin = one command-line token per line, stdout = "<host>|<port>"
+# for the first `--host` / `--port` it finds (either spelling: `--port 8888` or `--port=8888`).
+# Missing values come back empty, so a caller can tell "not found" from "found 0.0.0.0".
+cf_uvicorn_args_parse() {
+  local tok host='' port='' want=''
+  # `|| [[ -n $tok ]]`: a token stream whose last line is not newline-terminated must not
+  # lose that token - which is exactly where a --port ends up.
+  while IFS= read -r tok || [[ -n $tok ]]; do
+    case $want in
+      host) host=$tok; want='' ; continue ;;
+      port) port=$tok; want='' ; continue ;;
+    esac
+    case $tok in
+      --host) want=host ;;
+      --port) want=port ;;
+      --host=*) host=${tok#--host=} ;;
+      --port=*) port=${tok#--port=} ;;
+    esac
+  done
+  printf '%s|%s\n' "$host" "$port"
+}
+
+# cf_legacy_uvicorn <container>: "<host>|<port>" the legacy container's uvicorn really uses,
+# read from its command and, failing that, from the CreateCommand podman recorded.
+cf_legacy_uvicorn() {
+  local c=$1 out
+  out=$(podman inspect -f '{{range .Config.Cmd}}{{println .}}{{end}}' "$c" 2>/dev/null | cf_uvicorn_args_parse)
+  [[ $out != '|' ]] && { printf '%s\n' "$out"; return 0; }
+  podman inspect -f '{{range .Config.CreateCommand}}{{println .}}{{end}}' "$c" 2>/dev/null | cf_uvicorn_args_parse
+}
 # ---- which remote-access path is this session on? --------------------------------------------
 # The client address in SSH_CONNECTION does NOT tell the two paths apart. tailscaled runs with
 # --tun=userspace-networking on these hosts, so it terminates the tailnet connection itself and

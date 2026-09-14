@@ -135,6 +135,17 @@ case $cmd in
     exit 0 ;;
   save)
     [[ $1 == -o ]] && echo image >"$2"; exit 0 ;;
+  exec)
+    # `podman exec <c> sh -c 'tailscale serve status --json'`: the rescue-path proof
+    # migrate-legacy.sh demands (cf-gate.sh, cf_rescue_ssh_ok). The default models a rescue
+    # container that really does serve TCP :22 on the tailnet; MOCK_RESCUE_NO_SSH=1 models
+    # woowtechopenclaw's woow-tailscale-gateway, which serves 18081/443/8443/9443/9444 only.
+    if [[ ${MOCK_RESCUE_NO_SSH:-0} == 1 ]]; then
+      echo '{"TCP":{"443":{"HTTPS":true},"8443":{"HTTPS":true},"9443":{"HTTPS":true},"9444":{"HTTPS":true},"18081":{"HTTPS":true}},"Web":{}}'
+    else
+      echo '{"TCP":{"22":{"TCPForward":"127.0.0.1:22"},"443":{"HTTPS":true}},"Web":{}}'
+    fi
+    exit 0 ;;
   healthcheck) new_healthy; exit ;;
   *) exit 0 ;;
 esac

@@ -42,14 +42,28 @@
 # the legacy unit automatically.
 #
 # Settings (env): LEGACY_UNIT LEGACY_CONTAINER LEGACY_GUI_PORT RESCUE_CONTAINER (none to skip)
+#   RESCUE_PROOF (tailscale-ssh, the default: the rescue container must really serve TCP
+#     :22 on the tailnet - or lan|console, which you assert deliberately)
+#   CF_ALLOW_BIND_NARROWING=1 (acknowledge that a non-loopback legacy GUI bind becomes
+#     UVICORN_HOST=127.0.0.1 after the swap, so LAN clients lose the GUI)
 #   EXTRA_UNITS HTTP_OVERRIDES ("host=code ...") EXPECT_CONNS GATE_TIMEOUT SOAK_SECONDS
 #   POLL SOAK_POLL LEGACY_READY_TIMEOUT SAVE_LEGACY_IMAGE (1)
 # The tunnel token is never read or printed.
 # shellcheck source-path=SCRIPTDIR
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# Lineage guard, ahead of the library source on purpose: a host's pre-Quadlet deployment tree
+# (a hand-copied, non-git directory that often carries the same name as this repo) has no
+# scripts/lib/quadlet-lib.sh, so sourcing first would die with a bare "No such file or
+# directory" instead of saying what is wrong. ql_require_own_lineage below catches the trees
+# that DO carry a lib copy.
+[[ -r $HERE/lib/quadlet-lib.sh ]] || {
+  printf '%s: ERROR: %s\n' "${0##*/}" "no scripts/lib/quadlet-lib.sh under $(dirname "$HERE"): this is not a checkout of WOOWTECH/Woow_cloudflare_tunnel_webgui. If it has scripts/deploy.sh you are running this from the host's pre-Quadlet deployment tree, which is not this package's lineage and is not a git repo - run from a fresh clone, and do not delete that tree: three live systemd units execute scripts from it" >&2
+  exit 1
+}
 # shellcheck source=lib/quadlet-lib.sh
 . "$HERE/lib/quadlet-lib.sh"
+ql_require_own_lineage "$(dirname "$HERE")" WOOWTECH/Woow_cloudflare_tunnel_webgui
 # shellcheck source=lib/cf-gate.sh
 . "$HERE/lib/cf-gate.sh"
 export QL_LOG_PREFIX=migrate-legacy QL_APP=$CF_APP
@@ -64,7 +78,7 @@ QUADLET_DIR=${QL_QUADLET_DIR:-$HOME/.config/containers/systemd}
 ENV_FILE=$HOME/.config/$CF_APP/$CF_APP.env
 PREFIX=migrate
 
-usage() { sed -n '2,46p' "$0"; exit 64; }
+usage() { sed -n '2,50p' "$0"; exit 64; }
 run_arg() {
   local r=${1:-}
   [[ -n $r ]] || r=$(cf_latest_run "$PREFIX")
@@ -100,9 +114,26 @@ cmd_preflight() {
   else
     ok "this session does not ride the tunnel ($CF_SESSION_WHY)"
   fi
+  # The rescue path has to be demonstrated, not assumed. A running container is only the
+  # precondition; the proof is that it serves TCP :22 on the tailnet (see cf-gate.sh,
+  # "is there really a second way in?"). RESCUE_PROOF=lan|console is the deliberate override
+  # for a host reachable another way.
   if [[ $RESCUE_CONTAINER != none ]]; then
     check "rescue path: container $RESCUE_CONTAINER running" \
       test "$(podman inspect -f '{{.State.Status}}' "$RESCUE_CONTAINER" 2>/dev/null)" = running
+    case ${RESCUE_PROOF:-tailscale-ssh} in
+      lan | console)
+        echo "  WARN  rescue path asserted by RESCUE_PROOF=$RESCUE_PROOF; :22 over the tailnet was not checked" ;;
+      tailscale-ssh)
+        local why=''
+        if why=$(cf_rescue_ssh_ok "$RESCUE_CONTAINER"); then
+          ok "rescue path: $RESCUE_CONTAINER serves TCP :22 on the tailnet"
+        else
+          bad "rescue path: $RESCUE_CONTAINER does not demonstrably serve TCP :22 on the tailnet"
+          printf '%s\n' "$why"
+        fi ;;
+      *) bad "RESCUE_PROOF=$RESCUE_PROOF is not one of tailscale-ssh, lan, console" ;;
+    esac
   fi
   ((problems == 0)) || { echo "preflight: $problems problem(s); nothing was changed."; return 1; }
 
@@ -127,6 +158,19 @@ cmd_preflight() {
   fi
 
   echo "== 2. checks"
+  # A unit name that does not exist on this host used to produce three FAIL lines that read
+  # as "the service is broken". openclaw's unit is podman-cf-tunnel-webgui.service, so say so.
+  if [[ $(systemctl --user show -p LoadState --value "$LEGACY_UNIT" 2>/dev/null) != loaded ]]; then
+    local -a cands=()
+    mapfile -t cands < <(cf_units_mentioning "$LEGACY_CONTAINER")
+    if ((${#cands[@]})); then
+      echo "  note  $LEGACY_UNIT is not a loaded user unit. These user units name the container $LEGACY_CONTAINER:"
+      printf '          %s\n' "${cands[@]}"
+      echo "          did you mean ${cands[0]}? re-run with LEGACY_UNIT=${cands[0]}"
+    else
+      echo "  note  $LEGACY_UNIT is not a loaded user unit, and no user unit names $LEGACY_CONTAINER either"
+    fi
+  fi
   check "$LEGACY_UNIT active" systemctl --user is-active --quiet "$LEGACY_UNIT"
   check "$LEGACY_UNIT enabled" test "$(systemctl --user is-enabled "$LEGACY_UNIT" 2>/dev/null)" = enabled
   check "$LEGACY_UNIT file kept for rollback: ~/.config/systemd/user/$LEGACY_UNIT" test -f "$HOME/.config/systemd/user/$LEGACY_UNIT"
@@ -136,7 +180,37 @@ cmd_preflight() {
   check "staged VolumeName equals the legacy volume (CF_DATA_VOLUME in $ENV_FILE)" same_nonempty "$staged_vol" "$legacy_vol"
   n=$(cf_ready_conns)
   check "legacy cloudflared readyConnections=$n (want $EXPECT_CONNS) on $METRICS_ADDR" test "$n" -ge "$EXPECT_CONNS"
-  check "legacy GUI answers on 127.0.0.1:$LEGACY_GUI_PORT" cf_gui_ok "$LEGACY_GUI_PORT"
+  # LEGACY_GUI_PORT defaults to the STAGED UVICORN_PORT (this repo's 18000). Where the legacy
+  # deployment runs another one - openclaw: `uvicorn --host 0.0.0.0 --port 8888` - the probe
+  # curls a port nothing listens on. Read what the container really runs and name it.
+  local luv lhost lport
+  luv=$(cf_legacy_uvicorn "$LEGACY_CONTAINER")
+  lhost=${luv%%|*} lport=${luv##*|}
+  if cf_gui_ok "$LEGACY_GUI_PORT"; then
+    ok "legacy GUI answers on 127.0.0.1:$LEGACY_GUI_PORT"
+  else
+    bad "legacy GUI does not answer on 127.0.0.1:$LEGACY_GUI_PORT/api/health"
+    if [[ -n $lport ]]; then
+      echo "        $LEGACY_CONTAINER runs uvicorn --host ${lhost:-<unset>} --port $lport; re-run with LEGACY_GUI_PORT=$lport"
+    else
+      echo "        could not read a uvicorn --port from $LEGACY_CONTAINER's command or CreateCommand; set LEGACY_GUI_PORT by hand"
+    fi
+  fi
+  # The staged unit hard-codes UVICORN_HOST=127.0.0.1 (not a render var). Where the legacy GUI
+  # binds a non-loopback address the swap therefore narrows it to loopback and every LAN
+  # client loses the GUI - and cf_baseline cannot see it, because the container is
+  # Network=host and cloudflared reaches localhost either way. Refuse rather than change it.
+  local staged_host
+  staged_host=$(sed -n 's/^Environment=UVICORN_HOST=//p' "$cont" | tail -n1)
+  if [[ -n $lhost && $lhost != 127.0.0.1 && $lhost != localhost && ${staged_host:-127.0.0.1} == 127.0.0.1 ]]; then
+    if [[ ${CF_ALLOW_BIND_NARROWING:-0} == 1 ]]; then
+      echo "  WARN  the GUI bind narrows from $lhost to 127.0.0.1 (CF_ALLOW_BIND_NARROWING=1)"
+    else
+      bad "the legacy GUI binds $lhost:${lport:-?} but the staged unit hard-codes UVICORN_HOST=127.0.0.1"
+      echo "        after the swap the GUI would be loopback-only and every LAN client would lose it. The tunnel checks cannot catch this: the container is Network=host, so cloudflared reaches localhost:\$UVICORN_PORT either way."
+      echo "        Set UVICORN_HOST in quadlet/woow-cf-tunnel.container (or front the GUI with the auth proxy), or acknowledge the narrowing with CF_ALLOW_BIND_NARROWING=1."
+    fi
+  fi
   check "staged image $staged_img present" podman image exists "$staged_img"
   check "$NEW_UNIT not installed yet" test "$(systemctl --user show -p LoadState --value "$NEW_UNIT" 2>/dev/null)" = not-found
   check "no woow-cf-tunnel Quadlet file installed yet" none_installed
