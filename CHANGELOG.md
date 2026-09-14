@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+**Shared library**
+- The vendored `scripts/lib/quadlet-lib.sh` is now **1.8.0**, not 1.7.0. Two different files
+  were released as 1.7.0: the copy vendored here, and the canonical one that had since gained
+  `ql_require_healthcheck_timers`, `ql_stop_healthcheck_timer` and an *active*
+  `ql_wait_container_healthy` (it runs `podman healthcheck run` itself instead of waiting on
+  `.State.Health.Status`, which never moves off `starting` on woowtechopenclaw). That content
+  is re-released as 1.8.0; **1.7.0 is withdrawn** and every copy claiming it is now refused.
+  The call sites here already passed `QL_HEALTH_ACTIVE=1` explicitly, so the behaviour of this
+  package's scripts is unchanged - what changes is that the version string is true again.
+- New `scripts/lib/quadlet-lib.versions` (the canonical ledger of released
+  `(version, sha256)` pairs) and `tests/lib-version.sh`, which CI now runs. `sha256sum -c` on
+  `quadlet-lib.manifest` only ever proved "not edited since it was copied here" - the manifest
+  is written by this repo - so it stayed green through the whole collision.
+
 ## 1.1.0 — Quadlet + systemd as the primary deployment
 
 **Deployment**

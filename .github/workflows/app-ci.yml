@@ -50,6 +50,11 @@ jobs:
           esac
           grep -q '^ARG CLOUDFLARED_SHA256_AMD64=[0-9a-f]\{64\}$' Dockerfile
           grep -q '^ARG CLOUDFLARED_SHA256_ARM64=[0-9a-f]\{64\}$' Dockerfile
+      # tests/host-tree.sh pins the rescue-path proof (a running container is not a second
+      # way in - it has to serve TCP :22 on the tailnet) and the probes that name openclaw's
+      # real unit and uvicorn --host/--port instead of failing opaquely.
+      - name: Host-tree, rescue-path and lineage guards
+        run: tests/host-tree.sh
       - name: no secrets in the repo
         run: tests/no-secrets.sh
 

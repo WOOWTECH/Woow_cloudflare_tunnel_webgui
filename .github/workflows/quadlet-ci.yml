@@ -27,6 +27,12 @@ jobs:
       - name: Vendored quadlet-lib is unmodified
         run: sha256sum -c scripts/lib/quadlet-lib.manifest
 
+      # The manifest above is written by the repo itself, so it only proves "not edited since
+      # the copy". This step proves WHICH quadlet-lib this is, against the vendored ledger of
+      # released (version, sha256) pairs. Two different files were once both called 1.7.0.
+      - name: Vendored quadlet-lib really is the version it claims
+        run: tests/lib-version.sh
+
       - name: Quadlet dry-run + systemd-analyze verify
         run: tests/dryrun.sh
 
