@@ -42,8 +42,9 @@
 # the legacy unit automatically.
 #
 # Settings (env): LEGACY_UNIT LEGACY_CONTAINER LEGACY_GUI_PORT RESCUE_CONTAINER (none to skip)
-#   RESCUE_PROOF (tailscale-ssh, the default: the rescue container must really serve TCP
-#     :22 on the tailnet - or lan|console, which you assert deliberately)
+#   RESCUE_PROOF (tailscale-ssh, the default: :22 on the rescue node must demonstrably reach
+#     this host - either an explicit serve rule, or ShieldsUp off with sshd listening, which is
+#     enough on its own - or lan|console, which you assert deliberately)
 #   CF_ALLOW_BIND_NARROWING=1 (acknowledge that a non-loopback legacy GUI bind becomes
 #     UVICORN_HOST=127.0.0.1 after the swap, so LAN clients lose the GUI)
 #   EXTRA_UNITS HTTP_OVERRIDES ("host=code ...") EXPECT_CONNS GATE_TIMEOUT SOAK_SECONDS

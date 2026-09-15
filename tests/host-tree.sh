@@ -64,20 +64,35 @@ mk_home() {
 SERVE_OPENCLAW='{"TCP":{"443":{"HTTPS":true},"8443":{"HTTPS":true},"9443":{"HTTPS":true},
 "9444":{"HTTPS":true},"18081":{"HTTPS":true}},"Web":{},"AllowFunnel":{}}'
 SERVE_WITH_SSH='{"TCP":{"22":{"TCPForward":"127.0.0.1:22"},"443":{"HTTPS":true}},"Web":{}}'
+# `tailscale debug prefs`, trimmed to the field that decides whether inbound is accepted at all.
+PREFS_SHIELDS_OFF='{"ShieldsUp":false,"RunSSH":false,"NoStatefulFiltering":true}'
+PREFS_SHIELDS_ON='{"ShieldsUp":true,"RunSSH":false,"NoStatefulFiltering":true}'
 
 # mk_podman <home> <serve json> [cmd tokens] [createcommand tokens]: a podman stub answering
 # `exec <c> sh -c ...` with the serve JSON and `inspect -f ...` with the uvicorn command line.
+# The stub must tell `tailscale serve status` apart from `tailscale debug prefs`: cf_rescue_ssh_ok
+# asks the same container both questions and a stub that answers everything with the serve JSON
+# makes the prefs branch untestable. `ss` is stubbed for the same reason - without it the test
+# would read the REAL workstation's :22 and pass or fail by accident.
 mk_podman() {
-  local h=$1 serve=$2 cmd=${3-} create=${4-} bin=$1/bin
+  local h=$1 serve=$2 cmd=${3-} create=${4-} prefs=${5-} sshd=${6-} bin=$1/bin
   mkdir -p "$bin"
   printf '%s' "$serve" >"$h/serve.json"
   printf '%s' "$cmd" >"$h/cmd.txt"
   printf '%s' "$create" >"$h/create.txt"
+  printf '%s' "$prefs" >"$h/prefs.json"
+  printf '%s' "$sshd" >"$h/sshd.txt"
   {
     printf '#!/usr/bin/env bash\nD=%q\n' "$h"
     cat <<'STUB'
 case ${1:-} in
-  exec) [[ -s $D/serve.json ]] || exit 1; cat "$D/serve.json" ;;
+  exec)
+    want=$*
+    if [[ $want == *"debug prefs"* ]]; then
+      [[ -s $D/prefs.json ]] || exit 1; cat "$D/prefs.json"
+    else
+      [[ -s $D/serve.json ]] || exit 1; cat "$D/serve.json"
+    fi ;;
   inspect)
     fmt=''
     for a in "$@"; do [[ $a == *'{{'* ]] && fmt=$a; done
@@ -90,6 +105,15 @@ exit 0
 STUB
   } >"$bin/podman"
   chmod +x "$bin/podman"
+  {
+    printf '#!/usr/bin/env bash\nD=%q\n' "$h"
+    cat <<'STUB'
+# `ss -lntH 'sport = :22'` -> one line in ss's real column layout, or nothing.
+[[ -s $D/sshd.txt ]] || exit 0
+printf 'LISTEN 0 4096 %s 0.0.0.0:*\n' "$(cat "$D/sshd.txt")"
+STUB
+  } >"$bin/ss"
+  chmod +x "$bin/ss"
   printf '%s' "$bin"
 }
 
@@ -135,7 +159,7 @@ t_rescue_refuses_gateway_without_ssh() {
   load
   out=$(cf_rescue_ssh_ok woow-tailscale-gateway) || rc=$?
   eq "$rc" 1 "a rescue container that does not serve :22 must not pass"
-  has "$out" ":22 is NOT served" "the diagnosis"
+  has "$out" ":22 is not served" "the diagnosis"
   has "$out" "18081" "the ports it does serve are printed"
   has "$out" "RESCUE_PROOF=lan" "the deliberate override is offered"
 }
@@ -149,6 +173,66 @@ t_rescue_accepts_real_ssh() {
   export PATH
   load
   cf_rescue_ssh_ok woow-tailscale || die_t "a container that serves :22 must pass"
+}
+
+# The openclaw shape: no :22 serve rule, ShieldsUp off, sshd on 0.0.0.0:22. This is a REAL way in
+# - it is the path every 2026-09-15 reading of that host was taken over - and the old check called
+# it "not a way back in", which would have pushed the operator to RESCUE_PROOF=lan on a host where
+# the tailnet path was fine all along.
+t_rescue_accepts_userspace_forward() {
+  HOME=$(mk_home)
+  export HOME
+  local bin out
+  bin=$(mk_podman "$HOME" "$SERVE_OPENCLAW" '' '' "$PREFS_SHIELDS_OFF" '0.0.0.0:22')
+  PATH=$bin:$PATH
+  export PATH
+  load
+  out=$(cf_rescue_ssh_ok woow-tailscale-gateway) || die_t "ShieldsUp off + a listening sshd is a way in, with or without a serve rule"
+  has "$out" "none is needed" "it says why no rule is required"
+  has "$out" "0.0.0.0:22" "it names the listener it found"
+  has "$out" "does not prove the tailnet ACL" "it is honest that this is evidence, not proof"
+}
+
+# ShieldsUp ON drops every inbound connection, so the fallback genuinely does not exist.
+t_rescue_refuses_shields_up() {
+  HOME=$(mk_home)
+  export HOME
+  local bin out rc=0
+  bin=$(mk_podman "$HOME" "$SERVE_OPENCLAW" '' '' "$PREFS_SHIELDS_ON" '0.0.0.0:22')
+  PATH=$bin:$PATH
+  export PATH
+  load
+  out=$(cf_rescue_ssh_ok woow-tailscale-gateway) || rc=$?
+  eq "$rc" 1 "ShieldsUp on is not a rescue path"
+  has "$out" "ShieldsUp is ON" "the reason is named"
+}
+
+# ShieldsUp off proves nothing if no sshd is listening for the node to hand the connection to.
+t_rescue_refuses_no_sshd() {
+  HOME=$(mk_home)
+  export HOME
+  local bin out rc=0
+  bin=$(mk_podman "$HOME" "$SERVE_OPENCLAW" '' '' "$PREFS_SHIELDS_OFF" '')
+  PATH=$bin:$PATH
+  export PATH
+  load
+  out=$(cf_rescue_ssh_ok woow-tailscale-gateway) || rc=$?
+  eq "$rc" 1 "no sshd means no way in, whatever the node does"
+  has "$out" "listening on :22" "the reason is named"
+}
+
+# Unreadable prefs must not be read as "off". Absence of evidence is not evidence.
+t_rescue_refuses_unreadable_prefs() {
+  HOME=$(mk_home)
+  export HOME
+  local bin out rc=0
+  bin=$(mk_podman "$HOME" "$SERVE_OPENCLAW" '' '' '' '0.0.0.0:22')
+  PATH=$bin:$PATH
+  export PATH
+  load
+  out=$(cf_rescue_ssh_ok woow-tailscale-gateway) || rc=$?
+  eq "$rc" 1 "prefs that cannot be read are not a demonstrated path"
+  has "$out" "could not read ShieldsUp" "the reason is named"
 }
 
 t_rescue_refuses_unreadable() {
@@ -250,6 +334,10 @@ case_ tcp-ports-openclaw t_tcp_ports_openclaw
 case_ tcp-ports-with-ssh t_tcp_ports_with_ssh
 case_ tcp-ports-garbage t_tcp_ports_garbage
 case_ rescue-refuses-gateway-without-ssh t_rescue_refuses_gateway_without_ssh
+case_ rescue-accepts-userspace-forward   t_rescue_accepts_userspace_forward
+case_ rescue-refuses-shields-up          t_rescue_refuses_shields_up
+case_ rescue-refuses-no-sshd             t_rescue_refuses_no_sshd
+case_ rescue-refuses-unreadable-prefs    t_rescue_refuses_unreadable_prefs
 case_ rescue-accepts-real-ssh t_rescue_accepts_real_ssh
 case_ rescue-refuses-unreadable t_rescue_refuses_unreadable
 case_ units-mentioning t_units_mentioning
