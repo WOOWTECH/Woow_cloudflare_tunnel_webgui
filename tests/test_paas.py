@@ -385,3 +385,42 @@ async def test_device_slow_down_increases_poll_interval(client, fake_paas):
     assert result.json() == {"status": "waiting", "interval": 10}
     assert (await client.get("/api/paas/authorization/status")).json()["status"] == "waiting"
     assert sum(path == "/oauth2/token" for path, _ in fake_paas) == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_publication_with_complete_protection_does_not_block(client, fake_paas, tmp_config_dir):
+    # After an authorization change PaaS keeps the route pending (origin
+    # published as http_status:503) until a live connector lets it re-confirm
+    # Access. Waiting for pending=False before connecting would never end.
+    _authorized(tmp_config_dir)
+    fake_paas.detail["routes"][0].update(access_publish_pending=True, access_configuration_ready=False)
+    review = (await client.get("/api/paas/accesses/25/review")).json()
+    assert review["ready"] is True
+    assert review["awaiting_publication"] is True
+    route = review["access"]["routes"][0]
+    assert route["protected"] is False and route["awaiting_publication"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["no_login", "everyone", "unprotected", "lost", "unresolved_idp", "no_allow"])
+async def test_pending_publication_never_hides_a_missing_protection(client, fake_paas, tmp_config_dir, change):
+    _authorized(tmp_config_dir)
+    route = fake_paas.detail["routes"][0]
+    route.update(access_publish_pending=True, access_configuration_ready=False)
+    if change == "no_login":
+        route.update(login_email_otp=False, login_google=False)
+    elif change == "everyone":
+        route["access_policies"].append({"decision": "allow", "include": [{"rule_type": "everyone"}]})
+    elif change == "unprotected":
+        route["is_protected"] = False
+    elif change == "lost":
+        route["access_protection_lost"] = True
+    elif change == "unresolved_idp":
+        route["access_unresolved_idp_types"] = "google"
+    else:
+        route["access_policies"] = []
+    review = (await client.get("/api/paas/accesses/25/review")).json()
+    assert review["ready"] is False
+    assert review["access"]["routes"][0]["awaiting_publication"] is False
+    assert (await client.post("/api/paas/accesses/25/connect")).status_code == 409
+    assert all("tunnel-token" not in path for path, _ in fake_paas)

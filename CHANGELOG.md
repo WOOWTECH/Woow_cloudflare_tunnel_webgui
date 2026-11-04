@@ -13,6 +13,13 @@
   - On disconnect, the connector is stopped and confirmed gone (process exited, `/ready`
     closed) before the remote binding is released, in the same request. The add-on has to
     wait for a restart instead. Disconnect also clears the local routes, as the add-on does.
+  - A route that is still `access_publish_pending` does not block the claim when its own
+    protection is complete: an email allow-list, a login method, nothing broad, nothing lost
+    and no unresolved IdP. After an authorization change, PaaS re-publishes Access only once a
+    live connector is present, and it keeps the origin closed as `http_status:503` until then.
+    Waiting for pending to clear before connecting was a deadlock for any newly protected
+    route. The page shows such a route as awaiting publication. The add-on 1.1.1 has the same
+    gate.
   - The device is labelled `Woow Cloudflared (Podman)`. The OAuth client is the add-on's
     (`woow-ha-smart-home`); override it with `PAAS_CLIENT_ID`.
 - **Edge-connection status.** `GET /api/health` returns `version`, `tunnel.status`
