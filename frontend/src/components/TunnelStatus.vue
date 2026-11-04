@@ -1,16 +1,22 @@
 <template>
-  <StatusCard
-    title="Tunnel Status"
-    :badge="badge"
-    :variant="statusVariant"
-  >
+  <StatusCard title="Tunnel Status" :badge="badge" :variant="variant">
     <div class="space-y-1.5 text-sm text-gray-700">
-      <div v-if="status">
-        {{ status.running ? 'Tunnel process is running' : 'Tunnel process is stopped' }}
+      <div v-if="tunnel">
+        <template v-if="tunnel.status === 'running'">
+          Tunnel is connected ({{ tunnel.ready_connections }} edge
+          connection{{ tunnel.ready_connections === 1 ? '' : 's' }})
+        </template>
+        <template v-else-if="tunnel.status === 'starting'">
+          Tunnel is starting up...
+        </template>
+        <template v-else-if="stoppedByOperator">
+          Tunnel is held down by /data/.tunnel_stopped
+        </template>
+        <template v-else>
+          Tunnel is not running
+        </template>
       </div>
-      <div v-else class="text-gray-400">
-        Status unknown
-      </div>
+      <div v-else class="text-gray-400">Status unknown</div>
     </div>
   </StatusCard>
 </template>
@@ -21,16 +27,22 @@ import type { TunnelStatus } from '@/types'
 import StatusCard from './StatusCard.vue'
 
 const props = defineProps<{
-  status: TunnelStatus | null
+  tunnel: TunnelStatus | null
+  stoppedByOperator?: boolean
 }>()
 
-const badge = computed(() => {
-  if (!props.status) return 'unknown'
-  return props.status.running ? 'running' : 'stopped'
-})
+const badge = computed(() => props.tunnel?.status ?? 'unknown')
 
-const statusVariant = computed(() => {
-  if (props.status?.running) return 'green'
-  return 'gray'
+const variant = computed(() => {
+  switch (props.tunnel?.status) {
+    case 'running':
+      return 'green'
+    case 'starting':
+      return 'yellow'
+    case 'stopped':
+      return props.stoppedByOperator ? 'gray' : 'red'
+    default:
+      return 'gray'
+  }
 })
 </script>

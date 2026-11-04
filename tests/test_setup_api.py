@@ -51,6 +51,7 @@ async def test_apply_success_builds_validates_dns_restarts(
     client, monkeypatch, tmp_config_dir
 ):
     monkeypatch.setattr("backend.routers.setup.DATA_DIR", tmp_config_dir)
+    (tmp_config_dir / "cert.pem").write_text("CERT")
     (tmp_config_dir / "tunnel.json").write_text('{"TunnelID": "uuid-test"}')
     payload = {
         "routes": [
@@ -69,6 +70,7 @@ async def test_apply_calls_route_dns_per_route(
     client, mock_cli, monkeypatch, tmp_config_dir
 ):
     monkeypatch.setattr("backend.routers.setup.DATA_DIR", tmp_config_dir)
+    (tmp_config_dir / "cert.pem").write_text("CERT")
     (tmp_config_dir / "tunnel.json").write_text('{"TunnelID": "uuid-test"}')
     payload = {
         "routes": [

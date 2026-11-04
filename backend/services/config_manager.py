@@ -2,6 +2,8 @@ import json
 import asyncio
 from pathlib import Path
 
+from ..models.schemas import normalize_log_level, split_legacy_run_parameters
+
 # Persist settings on the /data volume so config survives container recreation
 # (TokenStore also uses /data; keeping them together is required for autostart).
 CONFIG_DIR = Path("/data")
@@ -14,7 +16,7 @@ DEFAULT_CONFIG = {
     "catch_all_service": "",
     "post_quantum": False,
     "log_level": "info",
-    "run_parameters": "",
+    "run_parameters": [],            # ["--flag=value", ...]
     "no_tls_verify": True,
     "container_image": "cloudflare/cloudflared:latest",  # 保留供 e2e/相容
 }
@@ -31,11 +33,11 @@ class ConfigManager:
                 await self._save_raw(DEFAULT_CONFIG)
                 return dict(DEFAULT_CONFIG)
             text = self._path.read_text()
-            return {**DEFAULT_CONFIG, **json.loads(text)}
+            return _migrate({**DEFAULT_CONFIG, **json.loads(text)})
 
     async def save(self, data: dict) -> dict:
         async with self._lock:
-            merged = {**DEFAULT_CONFIG, **data}
+            merged = _migrate({**DEFAULT_CONFIG, **data})
             # Never persist raw token in settings.json
             merged.pop("tunnel_token", None)
             await self._save_raw(merged)
@@ -44,3 +46,12 @@ class ConfigManager:
     async def _save_raw(self, data: dict) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(data, indent=2))
+
+
+def _migrate(cfg: dict) -> dict:
+    """Read settings.json written by 1.1.0 and older: run_parameters was one
+    string, and log_level could hold values cloudflared rejects."""
+    if isinstance(cfg.get("run_parameters"), str):
+        cfg["run_parameters"] = split_legacy_run_parameters(cfg["run_parameters"])
+    cfg["log_level"] = normalize_log_level(cfg.get("log_level", "info"))
+    return cfg

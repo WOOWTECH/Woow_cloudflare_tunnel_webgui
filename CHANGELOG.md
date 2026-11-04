@@ -1,6 +1,79 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 — feature parity with the Woow Cloudflared HA add-on (1.1.1)
+
+**Added**
+- **WOOW PaaS link** (`/paas` page, `/api/paas/*`). It uses the same flow and PaaS API as the
+  add-on: device authorization, workspace and service selection, and a per-route Access
+  review that refuses unprotected routes, `everyone` / bypass policies, routes with no login
+  method, zero-seat plans, unpaid subscriptions and binding conflicts. It also covers the
+  claim, anonymous external checks of the public hostnames, disconnect and OAuth revocation.
+  - The claimed token goes to `/data/.tunnel_token` (0600) and cloudflared starts in token
+    mode at once. A failed start rolls back and releases the new binding.
+  - On disconnect, the connector is stopped and confirmed gone (process exited, `/ready`
+    closed) before the remote binding is released, in the same request. The add-on has to
+    wait for a restart instead. Disconnect also clears the local routes, as the add-on does.
+  - A route that is still `access_publish_pending` does not block the claim when its own
+    protection is complete: an email allow-list, a login method, nothing broad, nothing lost
+    and no unresolved IdP. After an authorization change, PaaS re-publishes Access only once a
+    live connector is present, and it keeps the origin closed as `http_status:503` until then.
+    Waiting for pending to clear before connecting was a deadlock for any newly protected
+    route. The page shows such a route as awaiting publication. The add-on 1.1.1 has the same
+    gate.
+  - The device is labelled `Woow Cloudflared (Podman)`. The OAuth client is the add-on's
+    (`woow-ha-smart-home`); override it with `PAAS_CLIENT_ID`.
+- **Edge-connection status.** `GET /api/health` returns `version`, `tunnel.status`
+  (running / starting / stopped), `tunnel.ready_connections`, `stopped_by_operator` and
+  `credentials_error`. The status comes from cloudflared's `/ready`, the same signal the
+  healthcheck reads. The Dashboard and the nav-bar status dot show it.
+- `GET /api/logs`: a snapshot of the buffered cloudflared output.
+- `PUT /api/config?restart=true` (Config "Save & Apply") saves the settings and applies them.
+
+**Fixed**
+- Restart and "Save & Restart" re-ran the previous cloudflared argv, so saved changes
+  (post-quantum, log level, routes) did not take effect. Every start now builds the argv from
+  the current settings.
+- In local mode, routes edited on the Config page were never written to `config.json`; only
+  the wizard did that. A start now regenerates and validates the ingress config from
+  `settings.json`. DNS routes are created only for hostnames not routed before, so a start
+  does not depend on the Cloudflare API. A host whose ingress lives only in `config.json`
+  (no routes in `settings.json`) keeps it untouched.
+- `run_parameters` was stored but never passed to cloudflared.
+- The log-level list offered `trace`, `notice` and `warning`, which cloudflared rejects at
+  start. Only `debug`, `info`, `warn`, `error` and `fatal` remain.
+- The token file was written and then chmod'ed. It is now created 0600 atomically.
+
+**Security**
+- At startup, at every start and after Cloudflare login or tunnel creation, `cert.pem`,
+  `tunnel.json`, `.tunnel_token`, `paas-link.json` and `.csrf_secret` are re-owned and set to
+  0600 without reading them. A symlink, a hardlink or a non-regular file blocks the start,
+  and the Dashboard shows the reason. These are the add-on 1.1.1 credential-guard rules. The
+  process umask is 077.
+- 422 responses no longer echo the submitted value. FastAPI's default response returned the
+  pasted tunnel token.
+- Log lines are redacted before they are buffered or streamed: `--token`, `TunnelSecret`,
+  `tunnel_token` and bare `eyJ…` tokens.
+- `run_parameters` is limited to the add-on's allow-list (`--edge-bind-address`,
+  `--edge-ip-version`, `--grace-period`, `--ha-connections`, `--logfile`, `--loglevel`,
+  `--pidfile`, `--protocol`, `--region`, `--retries`, `--tag`). The token, token-file and
+  metrics flags cannot be overridden.
+- Pasted tokens are normalized: a whole `cloudflared service install eyJ…` command is
+  accepted, and a value that is not a tunnel token is refused.
+
+**Behaviour changes and migration**
+- `PUT /api/config` `tunnel_token`: omitted or `null` keeps the stored token, `""` removes
+  it, and a value replaces it. Token mode without a token is refused with 422. While a PaaS
+  link is active, the token and the mode are locked; disconnect on the PaaS page first.
+- `run_parameters` is now a list of `--flag=value` strings. The 1.1.0 string form in
+  `settings.json` is converted on read, and `--flag value` pairs are joined.
+- Stored log levels `trace`, `notice` and `warning` read as `debug`, `info` and `warn`.
+- `POST /api/tunnel/start` and `restart` answer 409 with the reason when the tunnel is not
+  configured, instead of starting a cloudflared that exits.
+- A GUI Stop stays temporary, as in 1.1.0: the healthcheck brings a configured tunnel back
+  within about two minutes. A hand-made `/data/.tunnel_stopped` now also stops the boot-time
+  autostart, not only the healthcheck, and Start removes it.
+- HA-only add-on options have no counterpart here. Use a route for `external_hostname`, and
+  a catch-all such as `http://localhost:80` for `nginx_proxy_manager`.
 
 **Shared library**
 - The vendored `scripts/lib/quadlet-lib.sh` is now **1.8.0**, not 1.7.0. Two different files

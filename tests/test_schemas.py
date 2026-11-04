@@ -19,12 +19,9 @@ from backend.models.schemas import (
 # LogLevel 列舉
 # =========================================================================
 class TestLogLevel:
-    """驗證所有 8 個日誌等級都能正確解析。"""
+    """cloudflared --loglevel 接受的 5 個等級。"""
 
-    @pytest.mark.parametrize(
-        "level",
-        ["trace", "debug", "info", "notice", "warn", "warning", "error", "fatal"],
-    )
+    @pytest.mark.parametrize("level", ["debug", "info", "warn", "error", "fatal"])
     def test_valid_log_levels(self, level):
         assert LogLevel(level).value == level
 
@@ -112,7 +109,7 @@ class TestTunnelConfigWrite:
         assert cfg.catch_all_service == ""
         assert cfg.post_quantum is False
         assert cfg.log_level == LogLevel.info
-        assert cfg.run_parameters == ""
+        assert cfg.run_parameters == []
         assert cfg.no_tls_verify is True
         assert cfg.tunnel_token is None
 
@@ -182,9 +179,14 @@ class TestTunnelConfigWrite:
 
     # --- log_level ---
     def test_all_log_levels_accepted(self):
-        for level in ["trace", "debug", "info", "notice", "warn", "warning", "error", "fatal"]:
+        for level in ["debug", "info", "warn", "error", "fatal"]:
             cfg = self._minimal(log_level=level)
             assert cfg.log_level == LogLevel(level)
+
+    @pytest.mark.parametrize("legacy,level", [("trace", "debug"), ("notice", "info"), ("warning", "warn")])
+    def test_legacy_log_levels_map_to_cloudflared_levels(self, legacy, level):
+        # 1.1.0 offered these, but cloudflared refuses them at start.
+        assert self._minimal(log_level=legacy).log_level == LogLevel(level)
 
     def test_invalid_log_level_rejected(self):
         with pytest.raises(ValidationError):

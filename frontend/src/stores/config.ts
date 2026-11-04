@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { api } from '@/api'
 import type { TunnelConfig, TunnelConfigUpdate } from '@/types'
-import { getCsrfToken } from '@/composables/useCsrf'
 
 export const useConfigStore = defineStore('config', () => {
   const config = ref<TunnelConfig | null>(null)
@@ -13,9 +13,7 @@ export const useConfigStore = defineStore('config', () => {
     loading.value = true
     error.value = null
     try {
-      const res = await fetch('/api/config')
-      if (!res.ok) throw new Error(await res.text())
-      config.value = await res.json()
+      config.value = await api<TunnelConfig>('/api/config')
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
     } finally {
@@ -23,25 +21,27 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
-  async function updateConfig(data: TunnelConfigUpdate) {
+  /**
+   * Save the settings. With restart, the backend also applies them (a fresh
+   * cloudflared argv and, in local mode, a regenerated ingress config).
+   */
+  async function updateConfig(data: TunnelConfigUpdate, restart = false): Promise<boolean> {
     loading.value = true
     error.value = null
     saved.value = false
     try {
-      const csrf = getCsrfToken()
-      const res = await fetch('/api/config', {
+      config.value = await api<TunnelConfig>(`/api/config?restart=${restart}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-csrftoken': csrf,
-        },
         body: JSON.stringify(data),
       })
-      if (!res.ok) throw new Error(await res.text())
-      config.value = await res.json()
       saved.value = true
+      return true
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e)
+      const message = e instanceof Error ? e.message : String(e)
+      // A save-and-apply can fail after the save: show what is stored now.
+      if (restart) await fetchConfig()
+      error.value = message
+      return false
     } finally {
       loading.value = false
     }

@@ -1,38 +1,44 @@
-from fastapi import APIRouter
+from pathlib import Path
 
-from ..services.process_manager import build_run_args, metrics_addr
-from ..services.instances import pm, config_mgr, token_store
+from fastapi import APIRouter, HTTPException
+
+from ..services import runtime
+from ..services.instances import pm, config_mgr, token_store, cli
 
 router = APIRouter(prefix="/api/tunnel", tags=["tunnel"])
+
+DATA_DIR = Path("/data")
 
 
 @router.get("/status")
 async def get_status():
-    return {"running": pm.is_running()}
+    return {
+        "running": pm.is_running(),
+        "stopped_by_operator": runtime.stopped_by_operator(DATA_DIR),
+    }
+
+
+async def _apply(message: str):
+    try:
+        await runtime.apply(pm, config_mgr, token_store, cli, DATA_DIR)
+    except runtime.TunnelStartError as exc:
+        raise HTTPException(exc.status, exc.message) from exc
+    return {"success": True, "message": message}
 
 
 @router.post("/start")
 async def start_tunnel():
-    cfg = await config_mgr.load()
-    args = build_run_args(
-        mode=cfg.get("mode", "local"),
-        token_file=str(token_store.path),
-        tunnel_name=cfg.get("tunnel_name", ""),
-        post_quantum=cfg.get("post_quantum", False),
-        log_level=cfg.get("log_level", "info"),
-        metrics=metrics_addr(),
-    )
-    await pm.start(args)
-    return {"success": True, "message": "Tunnel started"}
+    return await _apply("Tunnel started")
 
 
 @router.post("/stop")
 async def stop_tunnel():
-    await pm.stop()
+    await runtime.stop(pm)
     return {"success": True, "message": "Tunnel stopped"}
 
 
 @router.post("/restart")
 async def restart_tunnel():
-    await pm.restart()
-    return {"success": True, "message": "Tunnel restarted"}
+    # A fresh argv from the current settings, not ProcessManager.restart(),
+    # which would re-run the previous one.
+    return await _apply("Tunnel restarted")

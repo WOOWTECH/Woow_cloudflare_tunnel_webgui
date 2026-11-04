@@ -1,6 +1,6 @@
 <template>
   <nav class="border-b border-gray-200 bg-white">
-    <div class="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+    <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3">
       <!-- Logo -->
       <div class="flex items-center gap-2">
         <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-cf-orange">
@@ -13,7 +13,7 @@
       </div>
 
       <!-- Navigation Links -->
-      <div class="flex items-center gap-1">
+      <div class="order-3 flex w-full items-center gap-1 overflow-x-auto pb-1 sm:order-none sm:w-auto sm:pb-0">
         <router-link
           v-for="link in links"
           :key="link.to"
@@ -49,24 +49,27 @@ const tunnelStore = useTunnelStore()
 
 const links = [
   { to: '/', label: 'Dashboard' },
+  { to: '/paas', label: 'PaaS 連結' },
   { to: '/setup', label: 'Setup' },
   { to: '/config', label: 'Config' },
   { to: '/logs', label: 'Logs' },
 ]
 
 const statusDotClass = computed(() => {
-  const running = tunnelStore.status?.running
-  if (running === true) return 'bg-green-500'
-  return 'bg-gray-400'
+  switch (tunnelStore.tunnelStatus) {
+    case 'running':
+      return 'bg-green-500'
+    case 'starting':
+      return 'bg-amber-500'
+    case 'stopped':
+      return tunnelStore.health?.stopped_by_operator ? 'bg-gray-400' : 'bg-red-500'
+    default:
+      return 'bg-gray-400'
+  }
 })
 
-const statusLabel = computed(() => {
-  const running = tunnelStore.status?.running
-  if (running === true) return 'running'
-  if (running === false) return 'stopped'
-  return 'unknown'
-})
+const statusLabel = computed(() => tunnelStore.tunnelStatus)
 
-onMounted(() => tunnelStore.startPolling(5000))
+onMounted(() => tunnelStore.startPolling(4000))
 onUnmounted(() => tunnelStore.stopPolling())
 </script>

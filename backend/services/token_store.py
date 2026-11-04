@@ -1,5 +1,6 @@
 """Persist the cloudflared tunnel token to a file (single-container, no podman)."""
 import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -19,9 +20,22 @@ class TokenStore:
         return self._path
 
     def set(self, value: str) -> None:
+        """Write atomically; the file is 0600 from the moment it exists."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(value.strip())
-        os.chmod(self._path, 0o600)
+        handle, temporary = tempfile.mkstemp(prefix=".tunnel_token-", dir=self._path.parent)
+        try:
+            with os.fdopen(handle, "w") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(value.strip())
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self._path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    def clear(self) -> None:
+        self._path.unlink(missing_ok=True)
 
     def get(self) -> Optional[str]:
         if not self._path.exists():

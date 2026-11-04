@@ -5,6 +5,8 @@ import signal
 from collections import deque
 from typing import Optional
 
+from .redact import clean_line
+
 
 class ProcessManager:
     def __init__(self, log_buffer: int = 500):
@@ -40,7 +42,7 @@ class ProcessManager:
     async def _read_logs(self) -> None:
         assert self._proc and self._proc.stdout
         async for raw in self._proc.stdout:
-            line = raw.decode(errors="replace").rstrip("\n")
+            line = clean_line(raw.decode(errors="replace").rstrip("\n"))
             self._logs.append(line)
             for q in list(self._subscribers):
                 try:
@@ -85,6 +87,16 @@ def metrics_addr() -> str | None:
     return os.environ.get("CF_METRICS_ADDR") or None
 
 
+DEFAULT_METRICS_ADDR = "127.0.0.1:20241"
+
+
+def effective_metrics_addr() -> str:
+    """The address the app pins cloudflared's metrics to. Same default as
+    scripts/healthcheck.py, so the GUI status and the liveness check read the
+    same /ready even when CF_METRICS_ADDR is unset (e.g. a manual podman run)."""
+    return metrics_addr() or DEFAULT_METRICS_ADDR
+
+
 def build_run_args(
     mode: str,
     binary: str = "cloudflared",
@@ -95,6 +107,7 @@ def build_run_args(
     post_quantum: bool = False,
     log_level: str = "info",
     metrics: str | None = None,
+    run_parameters: list[str] | None = None,
 ) -> list[str]:
     """cloudflared argv. Token mode passes the token FILE, never the token:
     argv is readable by every local user (ps) and, under Quadlet, printed by
@@ -107,6 +120,8 @@ def build_run_args(
         args.append("--post-quantum")
     if log_level and log_level != "info":
         args.extend(["--loglevel", log_level])
+    # Tunnel-level flags go before `run`; they are allow-listed in the schema.
+    args.extend(run_parameters or [])
     if mode == "token":
         args.extend(["run", "--token-file", token_file])
     else:
@@ -141,6 +156,7 @@ def autostart_args(
             post_quantum=cfg.get("post_quantum", False),
             log_level=cfg.get("log_level", "info"),
             metrics=metrics,
+            run_parameters=cfg.get("run_parameters") or [],
         )
     if cert_exists and tunnel_exists and config_exists:
         return build_run_args(
@@ -149,5 +165,6 @@ def autostart_args(
             post_quantum=cfg.get("post_quantum", False),
             log_level=cfg.get("log_level", "info"),
             metrics=metrics,
+            run_parameters=cfg.get("run_parameters") or [],
         )
     return None

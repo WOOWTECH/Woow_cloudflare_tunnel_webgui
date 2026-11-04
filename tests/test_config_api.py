@@ -5,6 +5,8 @@
 
 import pytest
 
+from tests.conftest import make_token
+
 
 # =========================================================================
 # GET /api/config
@@ -56,14 +58,14 @@ class TestConfigPutToken:
     async def test_put_sets_token_returns_masked(self, client):
         resp = await client.put(
             "/api/config",
-            json={"tunnel_token": "my-super-secret-token"},
+            json={"tunnel_token": make_token()},
         )
         assert resp.status_code == 200
         assert resp.json()["tunnel_token_masked"] == "********"
 
     @pytest.mark.asyncio
     async def test_put_token_then_get_masked(self, client):
-        await client.put("/api/config", json={"tunnel_token": "another-secret"})
+        await client.put("/api/config", json={"tunnel_token": make_token(secret="b3RoZXI")})
         resp = await client.get("/api/config")
         assert resp.json()["tunnel_token_masked"] == "********"
 
@@ -80,7 +82,7 @@ class TestConfigPutNewFields:
 
     @pytest.mark.asyncio
     async def test_put_mode_token(self, client):
-        resp = await client.put("/api/config", json={"mode": "token"})
+        resp = await client.put("/api/config", json={"mode": "token", "tunnel_token": make_token()})
         assert resp.status_code == 200
         assert resp.json()["mode"] == "token"
 
@@ -120,6 +122,7 @@ class TestConfigPutNewFields:
         payload = {
             "tunnel_name": "persist-tunnel",
             "mode": "token",
+            "tunnel_token": make_token(),
             "routes": [{"hostname": "a.io", "service": "http://localhost:3000"}],
         }
         await client.put("/api/config", json=payload)
