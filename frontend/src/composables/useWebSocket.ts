@@ -1,23 +1,45 @@
 import { ref, onUnmounted } from 'vue'
+import { wsUrl } from '@/api'
 
-export function useWebSocket(url: string) {
+export function useWebSocket(path: string) {
   const messages = ref<string[]>([])
   const connected = ref(false)
   const error = ref<string | null>(null)
   let ws: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let disposed = false
+  let manualClose = false
   const MAX_LINES = 2000
+
+  function teardownSocket() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    if (ws) {
+      // Suppress the auto-reconnect that onclose would otherwise schedule.
+      ws.onclose = null
+      ws.onmessage = null
+      ws.onerror = null
+      ws.close()
+      ws = null
+    }
+  }
 
   function connect() {
     if (disposed) return
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}${url}`
-    ws = new WebSocket(wsUrl)
+    manualClose = false
+    // Never allow duplicate sockets/timers from repeated connect() calls.
+    teardownSocket()
+
+    ws = new WebSocket(wsUrl(path))
 
     ws.onopen = () => {
       connected.value = true
       error.value = null
+      // The server replays its buffer on connect — start from a clean slate
+      // to avoid duplicated lines after a reconnect.
+      messages.value = []
     }
 
     ws.onmessage = (event) => {
@@ -33,29 +55,27 @@ export function useWebSocket(url: string) {
 
     ws.onclose = () => {
       connected.value = false
-      if (!disposed) {
+      if (!disposed && !manualClose) {
         reconnectTimer = setTimeout(connect, 3000)
       }
     }
   }
 
+  /** Stop streaming (reconnectable — Connect works again afterwards). */
   function disconnect() {
-    disposed = true
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer)
-      reconnectTimer = null
-    }
-    if (ws) {
-      ws.close()
-      ws = null
-    }
+    manualClose = true
+    teardownSocket()
+    connected.value = false
   }
 
   function clear() {
     messages.value = []
   }
 
-  onUnmounted(disconnect)
+  onUnmounted(() => {
+    disposed = true
+    teardownSocket()
+  })
 
   return { messages, connected, error, connect, disconnect, clear }
 }

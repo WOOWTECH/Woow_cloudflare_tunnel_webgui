@@ -6,9 +6,8 @@ from fastapi import APIRouter, HTTPException, WebSocket
 from pydantic import BaseModel
 
 from ..models.schemas import SetupState, TunnelMode
-from ..services.config_builder import build_ingress_config, write_config_json
-from ..services.process_manager import build_run_args, metrics_addr
-from ..services.instances import pm, config_mgr, cli
+from ..services import runtime
+from ..services.instances import pm, config_mgr, cli, token_store
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
@@ -58,6 +57,10 @@ async def create_tunnel(req: CreateTunnelReq):
     await _reject_if_token_mode()
     cred = str(DATA_DIR / "tunnel.json")
     uuid = await cli.create_tunnel(name=req.tunnel_name, cred_file=cred)
+    try:
+        runtime.check_credentials(DATA_DIR)
+    except runtime.TunnelStartError as exc:
+        raise HTTPException(exc.status, exc.message) from exc
     cfg = await config_mgr.load()
     cfg["tunnel_name"] = req.tunnel_name
     await config_mgr.save(cfg)
@@ -72,46 +75,14 @@ class ApplyReq(BaseModel):
 @router.post("/apply")
 async def apply(req: ApplyReq):
     await _reject_if_token_mode()
-    tunnel_file = DATA_DIR / "tunnel.json"
-    if not tunnel_file.exists():
+    if not (DATA_DIR / "tunnel.json").exists():
         raise HTTPException(400, "尚未建立 tunnel")
-    uuid = json.loads(tunnel_file.read_text())["TunnelID"]
-
     cfg = await config_mgr.load()
-    config = build_ingress_config(
-        tunnel_uuid=uuid,
-        credentials_file=str(tunnel_file),
-        routes=req.routes,
-        catch_all_service=req.catch_all_service or None,
-        no_tls_verify=cfg.get("no_tls_verify", True),
-    )
-    config_path = DATA_DIR / "config.json"
-    write_config_json(config, config_path)
-
-    ok, output = await cli.ingress_validate(str(config_path))
-    if not ok:
-        raise HTTPException(422, f"ingress 驗證失敗:{output}")
-
-    for r in req.routes:
-        await cli.route_dns(uuid, r["hostname"])
-
-    cfg["routes"] = req.routes
-    cfg["catch_all_service"] = req.catch_all_service
-    await config_mgr.save(cfg)
-
-    args = build_run_args(
-        mode="local",
-        origincert=str(DATA_DIR / "cert.pem"),
-        config=str(config_path),
-        tunnel_name=cfg.get("tunnel_name", ""),
-        post_quantum=cfg.get("post_quantum", False),
-        log_level=cfg.get("log_level", "info"),
-        metrics=metrics_addr(),
-    )
-    if pm.is_running():
-        await pm.restart()
-    else:
-        await pm.start(args)
+    cfg = {**cfg, "routes": req.routes, "catch_all_service": req.catch_all_service}
+    try:
+        await runtime.apply(pm, config_mgr, token_store, cli, DATA_DIR, new_cfg=cfg)
+    except runtime.TunnelStartError as exc:
+        raise HTTPException(exc.status, exc.message) from exc
     return {"status": "applied", "route_count": len(req.routes)}
 
 
@@ -128,6 +99,11 @@ async def login_ws(ws: WebSocket):
     try:
         async for url in cli.login(src_cert=src, dest_cert=dest):
             await ws.send_json({"type": "url", "url": url})
+        try:
+            runtime.check_credentials(DATA_DIR)
+        except runtime.TunnelStartError as exc:
+            await ws.send_json({"type": "error", "message": exc.message})
+            return
         await ws.send_json({"type": "done"})
     finally:
         await ws.close()

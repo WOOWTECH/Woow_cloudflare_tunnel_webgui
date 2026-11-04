@@ -32,8 +32,13 @@
 ## 概述
 
 單一容器同時執行 FastAPI + Vue 的網頁介面，**以及它以子行程監管的 `cloudflared` 連接器**。
-貼上 tunnel token（或在介面上登入 Cloudflare），隧道就會運作。不需要 Podman socket、
-不需要第二個容器，也不需要下指令。
+貼上 tunnel token、在介面上登入 Cloudflare，或連結 **WOOW PaaS** 訂閱，隧道就會運作。
+不需要 Podman socket、不需要第二個容器，也不需要下指令。
+
+從 1.2.0 起，功能與 [Woow Cloudflared Home Assistant add-on](https://github.com/WOOWTECH/Woow_ha_cloudflare_tunnel_webgui)
+一致：PaaS 引導連結（逐條路由檢查 Access 保護）、邊緣連線狀態、日誌遮罩、run parameter 白名單，
+以及憑證檔權限防護。需要 HA Supervisor 的功能只在 add-on 提供，包括 Ingress、`external_hostname`
+與 `nginx_proxy_manager`；在這裡改用路由或 catch-all 即可達到相同效果。
 
 `scripts/install.sh` 會把它安裝成 **rootless Podman Quadlet 單元，由使用者層級的 systemd 管理**：
 開機自動啟動（需 linger）、當掉會自動重啟，而且從 1.1.0 起，**後端還活著但隧道死掉時也會自救**。
@@ -269,12 +274,13 @@ tests/smoke.sh             # 針對實際安裝
 
 | 端點 | 回傳 |
 |---|---|
-| `GET /api/health` | `{"status":"ok","process_running":true}` |
-| `GET /api/config` | `TunnelConfigRead`：`mode`、`tunnel_name`、`routes[]`、`catch_all_service`、`post_quantum`、`log_level`、`run_parameters`、`no_tls_verify`、`tunnel_token_masked` |
-| `PUT /api/config` | 同樣結構；`tunnel_token` 只能寫入，存到 `/data/.tunnel_token` |
-| `POST /api/tunnel/{start,stop,restart}`、`GET /api/tunnel/status` | 連接器控制 |
+| `GET /api/health` | `version`、`process_running`、`stopped_by_operator`、`tunnel`（`status`：running / starting / stopped，`ready_connections` 取自 cloudflared `/ready`）、`credentials_error` |
+| `GET /api/config` | `TunnelConfigRead`：`mode`、`tunnel_name`、`routes[]`、`catch_all_service`、`post_quantum`、`log_level`、`run_parameters[]`、`no_tls_verify`、`tunnel_token_masked`、`tunnel_token_set`、`tunnel_token_managed_by_paas` |
+| `PUT /api/config[?restart=true]` | 同樣結構。`tunnel_token` 只能寫入：省略或 `null` 保留、`""` 移除、給值（或貼上 `cloudflared service install …` 指令）則取代，存到 `/data/.tunnel_token`。加上 `restart=true` 會同時套用設定 |
+| `POST /api/tunnel/{start,stop,restart}`、`GET /api/tunnel/status` | 連接器控制；start 與 restart 都以目前設定重建 argv |
 | `GET /api/setup/state`、`POST /api/setup/*`、`WS /api/setup/login` | 本地管理上線精靈（token 模式會拒絕） |
-| `WS /ws/logs` | cloudflared 即時輸出 |
+| `GET /api/paas/bootstrap`、`/authorization[/status、/revoke]`、`/workspaces[/{id}/accesses]`、`/accesses/{id}/review`、`/accesses/{id}/connect`、`/connection/status[?probe=true]`、`/disconnect[/finish]` | WOOW PaaS 連結（與 HA add-on 相同的契約） |
+| `GET /api/logs`、`WS /ws/logs` | cloudflared 輸出（已遮罩憑證）：快照與即時串流 |
 
 會改變狀態的請求需要 CSRF double-submit cookie（`x-csrftoken`）。
 

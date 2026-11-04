@@ -25,7 +25,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
 const props = defineProps<{
   maskedValue: string
@@ -41,6 +41,17 @@ const userTyped = ref(false)
 const rawInput = ref('')
 
 const displayValue = ref(props.maskedValue)
+
+// Re-sync with the stored state whenever it changes (after save/reset the
+// parent refetches the config and the masked value must win again).
+watch(
+  () => props.maskedValue,
+  (masked) => {
+    userTyped.value = false
+    rawInput.value = ''
+    displayValue.value = masked
+  }
+)
 
 function onFocus() {
   if (!userTyped.value && props.maskedValue) {

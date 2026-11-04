@@ -7,6 +7,12 @@ from ..services.instances import pm
 router = APIRouter(tags=["logs"])
 
 
+@router.get("/api/logs")
+async def get_logs() -> dict:
+    """Snapshot of the buffered cloudflared output (already redacted)."""
+    return {"lines": pm.recent_logs()}
+
+
 @router.websocket("/ws/logs")
 async def stream_logs(websocket: WebSocket):
     """Stream cloudflared logs: send the backlog, then keep the connection open

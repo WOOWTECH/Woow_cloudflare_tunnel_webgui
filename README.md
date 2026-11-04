@@ -32,8 +32,16 @@
 ## Overview
 
 A single container runs a FastAPI + Vue web GUI **and the `cloudflared` connector it
-supervises as a child process**. You paste a tunnel token (or log in to Cloudflare from the
-GUI), and the tunnel runs. There is no Podman socket, no second container, and no CLI.
+supervises as a child process**. You paste a tunnel token, log in to Cloudflare from the
+GUI, or link a **WOOW PaaS** subscription, and the tunnel runs. There is no Podman socket,
+no second container, and no CLI.
+
+Since 1.2.0 the GUI has the same features as the
+[Woow Cloudflared Home Assistant add-on](https://github.com/WOOWTECH/Woow_ha_cloudflare_tunnel_webgui):
+the guided PaaS link with per-route Access review, edge-connection status, redacted logs,
+the run-parameter allow-list and the credential-file guard. What stays add-on only is what
+needs the HA Supervisor: Ingress, `external_hostname` and `nginx_proxy_manager`. Here a
+route or a catch-all does the same job.
 
 `scripts/install.sh` installs it as **rootless Podman Quadlet units under user systemd**, so
 it starts at boot (with linger), restarts when it crashes, and — new in 1.1.0 — restarts
@@ -328,12 +336,13 @@ chain (bogus token → unhealthy → `HealthOnFailure=kill` → `Restart=always`
 
 | Endpoint | Returns |
 |---|---|
-| `GET /api/health` | `{"status":"ok","process_running":true}` |
-| `GET /api/config` | `TunnelConfigRead`: `mode`, `tunnel_name`, `routes[]`, `catch_all_service`, `post_quantum`, `log_level`, `run_parameters`, `no_tls_verify`, `tunnel_token_masked` |
-| `PUT /api/config` | same shape; `tunnel_token` is write-only and stored in `/data/.tunnel_token` |
-| `POST /api/tunnel/{start,stop,restart}`, `GET /api/tunnel/status` | connector control |
+| `GET /api/health` | `version`, `process_running`, `stopped_by_operator`, `tunnel` (`status`: running / starting / stopped, `ready_connections` from cloudflared `/ready`), `credentials_error` |
+| `GET /api/config` | `TunnelConfigRead`: `mode`, `tunnel_name`, `routes[]`, `catch_all_service`, `post_quantum`, `log_level`, `run_parameters[]`, `no_tls_verify`, `tunnel_token_masked`, `tunnel_token_set`, `tunnel_token_managed_by_paas` |
+| `PUT /api/config[?restart=true]` | same shape. `tunnel_token` is write-only: omitted or `null` keeps it, `""` removes it, and a value (or a pasted `cloudflared service install …` command) replaces it, in `/data/.tunnel_token`. With `restart=true` the settings are also applied |
+| `POST /api/tunnel/{start,stop,restart}`, `GET /api/tunnel/status` | connector control; start and restart build the argv from the current settings |
 | `GET /api/setup/state`, `POST /api/setup/*`, `WS /api/setup/login` | the local-managed wizard (refused in token mode) |
-| `WS /ws/logs` | live cloudflared output |
+| `GET /api/paas/bootstrap`, `/authorization[/status,/revoke]`, `/workspaces[/{id}/accesses]`, `/accesses/{id}/review`, `/accesses/{id}/connect`, `/connection/status[?probe=true]`, `/disconnect[/finish]` | the WOOW PaaS link (same contract as the HA add-on) |
+| `GET /api/logs`, `WS /ws/logs` | cloudflared output (credentials redacted): snapshot and live |
 
 Mutating calls need the CSRF double-submit cookie (`x-csrftoken`).
 

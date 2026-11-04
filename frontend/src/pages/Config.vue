@@ -6,7 +6,7 @@
       Loading...
     </div>
 
-    <form v-else @submit.prevent="onSave" class="space-y-6">
+    <form v-else @submit.prevent="onSave(false)" class="space-y-6">
       <!-- Basic Settings -->
       <fieldset class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <legend class="px-2 text-sm font-semibold text-gray-700">Basic Settings</legend>
@@ -15,11 +15,12 @@
           <div>
             <label class="block text-sm font-medium text-gray-700">Mode</label>
             <p class="mb-1 text-xs text-gray-400">
-              local 使用本機憑證 (cert.pem);token 使用 Cloudflare Tunnel Token
+              local 使用本機憑證 (cert.pem),路由在下方管理;token 使用 Cloudflare 後台或 PaaS 提供的 tunnel token
             </p>
             <select
               v-model="form.mode"
-              class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
+              :disabled="managedByPaas"
+              class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange disabled:bg-gray-100"
             >
               <option value="local">local</option>
               <option value="token">token</option>
@@ -29,18 +30,45 @@
           <!-- Tunnel Token -->
           <div>
             <label class="block text-sm font-medium text-gray-700">Tunnel Token</label>
-            <p class="mb-1 text-xs text-gray-400">儲存在 /data,不落 settings.json。留空則保留現有 token。</p>
-            <TokenInput
-              :masked-value="configStore.config?.tunnel_token_masked ?? ''"
-              placeholder="eyJhIjoiLi4uIiwidCI6Ii4uLiIsInMiOiIuLi4ifQ=="
-              @update:token="form.tunnel_token = $event"
-            />
+            <template v-if="!managedByPaas">
+              <p class="mb-1 text-xs text-gray-400">
+                儲存在 /data(權限 0600),不寫入 settings.json。可以直接貼上
+                <code>cloudflared service install …</code> 整段指令。留空則保留現有 token。
+              </p>
+              <TokenInput
+                :masked-value="configStore.config?.tunnel_token_masked ?? ''"
+                placeholder="eyJhIjoiLi4uIiwidCI6Ii4uLiIsInMiOiIuLi4ifQ=="
+                @update:token="tokenInput = $event"
+              />
+              <div class="mt-2 flex items-center gap-3">
+                <span
+                  class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
+                  :class="configStore.config?.tunnel_token_set ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'"
+                >
+                  {{ configStore.config?.tunnel_token_set ? 'token configured' : 'no token' }}
+                </span>
+                <button
+                  v-if="configStore.config?.tunnel_token_set"
+                  type="button"
+                  class="text-xs font-medium text-red-500 hover:text-red-700"
+                  @click="toggleClearToken"
+                >
+                  {{ clearToken ? '儲存時保留 token' : '儲存時移除 token(改用 local 模式)' }}
+                </button>
+              </div>
+              <p v-if="clearToken" class="mt-1 text-xs text-amber-600">儲存後會刪除目前的 token。</p>
+            </template>
+            <p v-else class="rounded-lg bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-900">
+              此憑證由 WOOW PaaS 自動管理。若要改用手動 token 或 local 模式,請先到
+              <router-link to="/paas" class="font-semibold underline">PaaS 連結</router-link>
+              停止連線並解除綁定。
+            </p>
           </div>
 
           <!-- Tunnel Name -->
           <div>
             <label class="block text-sm font-medium text-gray-700">Tunnel Name</label>
-            <p class="mb-1 text-xs text-gray-400">Cloudflare Tunnel name for identification</p>
+            <p class="mb-1 text-xs text-gray-400">Cloudflare Tunnel 名稱(local 模式)</p>
             <input
               v-model="form.tunnel_name"
               type="text"
@@ -55,19 +83,21 @@
       <fieldset class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <legend class="px-2 text-sm font-semibold text-gray-700">Routes</legend>
         <p class="mt-1 mb-3 text-xs text-gray-400">
-          Route additional hostnames through the tunnel to local services
+          把公開 hostname 導向本機服務(容器使用 host 網路,填 http://localhost:埠)。
+          「儲存並套用」時會為新的 hostname 建立 DNS。
         </p>
         <div
           v-if="form.mode === 'token'"
           class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700"
         >
-          Token 模式下,ingress 路由由 Cloudflare 後台管理。以下本地路由設定僅在
+          Token 模式下,ingress 路由由 Cloudflare 後台或 PaaS 管理。以下本地路由設定僅在
           <span class="font-medium">local</span> 模式生效。
         </div>
-        <RouteEditor
-          :routes="form.routes"
-          @update:routes="form.routes = $event"
-        />
+        <p v-else class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+          移除路由或停止 tunnel,不會自動刪除 Cloudflare DNS。請到 Cloudflare DNS 檢查該網址的 CNAME,
+          確認不再使用後才刪除;也請檢查對應的 Access 應用。
+        </p>
+        <RouteEditor :routes="form.routes" @update:routes="form.routes = $event" />
       </fieldset>
 
       <!-- Catch-All Service -->
@@ -77,7 +107,7 @@
           <div>
             <label class="block text-sm font-medium text-gray-700">Catch-All Service URL</label>
             <p class="mb-1 text-xs text-gray-400">
-              Fallback service for unmatched hostnames.
+              未符合上方 hostname 的流量,例如交給本機的 Nginx Proxy Manager:http://localhost:80
             </p>
             <input
               v-model="form.catch_all_service"
@@ -97,7 +127,7 @@
           <div class="flex items-center justify-between">
             <div>
               <span class="text-sm font-medium text-gray-700">Post-Quantum Crypto</span>
-              <p class="text-xs text-gray-400">Use post-quantum key agreement for tunnel connections</p>
+              <p class="text-xs text-gray-400">只使用 QUIC 傳輸,部分網路環境可能無法連線</p>
             </div>
             <button
               type="button"
@@ -133,32 +163,31 @@
 
           <!-- Log Level -->
           <div>
-            <label class="block text-sm font-medium text-gray-700">Log Level</label>
+            <label class="block text-sm font-medium text-gray-700">cloudflared Log Level</label>
             <select
               v-model="form.log_level"
               class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
             >
-              <option value="trace">trace</option>
-              <option value="debug">debug</option>
-              <option value="info">info</option>
-              <option value="notice">notice</option>
-              <option value="warn">warn</option>
-              <option value="warning">warning</option>
-              <option value="error">error</option>
-              <option value="fatal">fatal</option>
+              <option v-for="lvl in LOG_LEVELS" :key="lvl" :value="lvl">{{ lvl }}</option>
             </select>
           </div>
 
           <!-- Run Parameters -->
           <div>
             <label class="block text-sm font-medium text-gray-700">Run Parameters</label>
-            <input
-              v-model="form.run_parameters"
-              type="text"
-              placeholder="--protocol quic --edge-ip-version auto"
-              class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-cf-orange focus:outline-none focus:ring-1 focus:ring-cf-orange"
+            <p class="mb-1 text-xs text-gray-400">
+              一行一個,格式 --flag=value。允許:--edge-bind-address、--edge-ip-version、
+              --grace-period、--ha-connections、--logfile、--loglevel、--pidfile、--protocol、
+              --region、--retries、--tag
+            </p>
+            <textarea
+              v-model="runParametersText"
+              rows="3"
+              placeholder="--protocol=http2&#10;--region=us"
+              class="mt-1 block w-full rounded-lg border px-3 py-2 font-mono text-sm shadow-sm focus:outline-none focus:ring-1"
+              :class="runParametersError ? 'border-red-300 focus:border-red-500 focus:ring-red-500' : 'border-gray-300 focus:border-cf-orange focus:ring-cf-orange'"
             />
-            <p class="mt-1 text-xs text-gray-400">Additional cloudflared run parameters</p>
+            <p v-if="runParametersError" class="mt-1 text-xs text-red-600">{{ runParametersError }}</p>
           </div>
         </div>
       </fieldset>
@@ -167,34 +196,41 @@
       <div class="flex items-center gap-3">
         <button
           type="submit"
-          class="rounded-lg bg-cf-orange px-5 py-2 text-sm font-medium text-white shadow-sm hover:bg-orange-600 disabled:opacity-50"
-          :disabled="configStore.loading"
+          class="rounded-lg border border-cf-orange bg-white px-5 py-2 text-sm font-medium text-cf-orange shadow-sm hover:bg-orange-50 disabled:opacity-50"
+          :disabled="configStore.loading || hasErrors"
         >
           {{ configStore.loading ? 'Saving...' : 'Save' }}
         </button>
         <button
           type="button"
           class="rounded-lg bg-cf-orange px-5 py-2 text-sm font-medium text-white shadow-sm hover:bg-orange-600 disabled:opacity-50"
-          :disabled="configStore.loading || tunnelStore.actionLoading"
-          @click="onSaveAndRestart"
+          :disabled="configStore.loading || hasErrors"
+          @click="onSave(true)"
         >
-          Save & Restart
+          Save &amp; Apply
         </button>
         <button
           type="button"
           class="rounded-lg border border-gray-300 bg-white px-5 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
           @click="resetForm"
         >
-          Cancel
+          Reset
         </button>
       </div>
+      <p class="text-xs text-gray-400">
+        「Save」只儲存設定;「Save &amp; Apply」會以新設定重新啟動 cloudflared(local 模式會重新產生並驗證 ingress,
+        並為新 hostname 建立 DNS)。tunnel 會中斷數秒。
+      </p>
+      <p v-if="tokenModeWithoutToken" class="text-xs text-amber-600">
+        token 模式需要 tunnel token,請先貼上 token。
+      </p>
 
       <!-- Feedback -->
       <div
         v-if="configStore.saved"
         class="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700"
       >
-        Configuration saved successfully.
+        {{ lastSaveApplied ? '設定已儲存並套用。' : '設定已儲存(尚未套用)。' }}
       </div>
       <div
         v-if="configStore.error"
@@ -207,68 +243,104 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, onMounted, watch } from 'vue'
+import { computed, reactive, ref, onMounted, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { useTunnelStore } from '@/stores/tunnel'
 import TokenInput from '@/components/TokenInput.vue'
 import RouteEditor from '@/components/RouteEditor.vue'
-import type { TunnelConfigUpdate, Route } from '@/types'
+import { hostnameError } from '@/utils/hostname'
+import type { LogLevel, Route, SetupMode, TunnelConfigUpdate } from '@/types'
+
+const LOG_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error', 'fatal']
+const RUN_PARAMETER_RE =
+  /^(--edge-bind-address|--edge-ip-version|--grace-period|--ha-connections|--logfile|--loglevel|--pidfile|--protocol|--region|--retries|--tag)=.*$/
 
 const configStore = useConfigStore()
 const tunnelStore = useTunnelStore()
 
-const form = reactive<TunnelConfigUpdate>({
-  tunnel_token: null,
-  mode: 'local',
+const tokenInput = ref<string | null>(null)
+const clearToken = ref(false)
+const runParametersText = ref('')
+const lastSaveApplied = ref(false)
+
+const form = reactive({
+  mode: 'local' as SetupMode,
   tunnel_name: '',
-  routes: [],
+  routes: [] as Route[],
   catch_all_service: '',
   post_quantum: false,
-  log_level: 'info',
-  run_parameters: '',
+  log_level: 'info' as LogLevel,
   no_tls_verify: true,
 })
 
+const managedByPaas = computed(() => !!configStore.config?.tunnel_token_managed_by_paas)
+
+const runParameters = computed(() =>
+  runParametersText.value.split('\n').map((l) => l.trim()).filter(Boolean)
+)
+
+const runParametersError = computed(() => {
+  const bad = runParameters.value.find((p) => !RUN_PARAMETER_RE.test(p))
+  return bad ? `'${bad}' 不是允許的 run parameter(格式:--flag=value)` : null
+})
+
+const tokenModeWithoutToken = computed(() => {
+  if (form.mode !== 'token' || managedByPaas.value) return false
+  if (clearToken.value) return true
+  return !tokenInput.value && !configStore.config?.tunnel_token_set
+})
+
+const hasErrors = computed(
+  () =>
+    runParametersError.value !== null ||
+    tokenModeWithoutToken.value ||
+    form.routes.some((r) => hostnameError(r.hostname) !== null || !r.service.trim())
+)
+
+function toggleClearToken() {
+  clearToken.value = !clearToken.value
+  if (clearToken.value) form.mode = 'local'
+}
+
 function resetForm() {
   const c = configStore.config
-  if (c) {
-    form.tunnel_token = null
-    form.mode = c.mode
-    form.tunnel_name = c.tunnel_name
-    form.routes = (c.routes || []).map((r: Route) => ({ ...r }))
-    form.catch_all_service = c.catch_all_service
-    form.post_quantum = c.post_quantum
-    form.log_level = c.log_level
-    form.run_parameters = c.run_parameters
-    form.no_tls_verify = c.no_tls_verify
-  }
+  tokenInput.value = null
+  clearToken.value = false
+  if (!c) return
+  form.mode = c.mode
+  form.tunnel_name = c.tunnel_name
+  form.routes = (c.routes || []).map((r: Route) => ({ ...r }))
+  form.catch_all_service = c.catch_all_service
+  form.post_quantum = c.post_quantum
+  form.log_level = c.log_level
+  form.no_tls_verify = c.no_tls_verify
+  runParametersText.value = (c.run_parameters || []).join('\n')
 }
 
 function payload(): TunnelConfigUpdate {
-  return {
-    tunnel_token: form.tunnel_token,
+  const body: TunnelConfigUpdate = {
     mode: form.mode,
-    tunnel_name: form.tunnel_name,
-    routes: form.routes.map((r) => ({ ...r })),
-    catch_all_service: form.catch_all_service,
+    tunnel_name: form.tunnel_name.trim(),
+    routes: form.routes.map((r) => ({ ...r, hostname: r.hostname.trim(), service: r.service.trim() })),
+    catch_all_service: form.catch_all_service.trim(),
     post_quantum: form.post_quantum,
     log_level: form.log_level,
-    run_parameters: form.run_parameters,
+    run_parameters: runParameters.value,
     no_tls_verify: form.no_tls_verify,
   }
+  // Omitted tunnel_token keeps the stored one; '' removes it.
+  if (clearToken.value) body.tunnel_token = ''
+  else if (tokenInput.value) body.tunnel_token = tokenInput.value
+  return body
 }
 
-async function onSave() {
-  await configStore.updateConfig(payload())
-}
-
-async function onSaveAndRestart() {
-  await configStore.updateConfig(payload())
-  if (!configStore.error) {
-    await tunnelStore.action('restart').catch(() => {
-      // If process isn't running, start instead
-      tunnelStore.action('start').catch(() => {})
-    })
+async function onSave(apply: boolean) {
+  lastSaveApplied.value = apply
+  const ok = await configStore.updateConfig(payload(), apply)
+  if (apply) tunnelStore.fetchHealth()
+  if (ok) {
+    clearToken.value = false
+    tokenInput.value = null
   }
 }
 

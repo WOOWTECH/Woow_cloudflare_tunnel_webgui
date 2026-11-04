@@ -8,6 +8,7 @@ Two test modes:
 
 import os
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,6 +29,25 @@ from backend.routers import config as config_router  # noqa: E402
 from backend.routers import health as health_router  # noqa: E402
 from backend.routers import tunnel as tunnel_router  # noqa: E402
 from backend.routers import setup as setup_router  # noqa: E402
+from backend.routers import paas as paas_router  # noqa: E402
+from backend.routers import logs as logs_router  # noqa: E402
+from backend.services import metrics as metrics_service  # noqa: E402
+from backend.models.schemas import TunnelStatus  # noqa: E402
+
+
+def make_token(account: str = "acct", tunnel: str = "tun", secret: str = "c2VjcmV0") -> str:
+    """A syntactically valid, synthetic Cloudflare tunnel token (base64 JSON
+    with a/t/s), so normalize_tunnel_token accepts it. Not a real credential."""
+    import base64
+    import json as _json
+    raw = _json.dumps({"a": account, "t": tunnel, "s": secret}).encode()
+    return base64.b64encode(raw).decode().rstrip("=")
+
+
+@pytest.fixture()
+def tunnel_status():
+    """What the mocked cloudflared /ready reports; tests may mutate it."""
+    return TunnelStatus(status="stopped", metrics_reachable=False)
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +97,7 @@ def mock_pm():
 # Fixtures: FastAPI TestClient with mocked dependencies
 # ---------------------------------------------------------------------------
 @pytest.fixture()
-async def client(tmp_config_dir, mock_cli, mock_pm):
+async def client(tmp_config_dir, mock_cli, mock_pm, tunnel_status):
     """
     Async httpx client wired to the real FastAPI app with:
       - ConfigManager writing to tmp dir (not /app/config)
@@ -91,17 +111,34 @@ async def client(tmp_config_dir, mock_cli, mock_pm):
     test_cfg_mgr = ConfigManager(config_path=tmp_config_dir / "settings.json")
     test_token_store = TokenStore(path=tmp_config_dir / ".tunnel_token")
 
-    with (
-        patch.object(config_router, "config_mgr", test_cfg_mgr),
-        patch.object(config_router, "token_store", test_token_store),
-        patch.object(tunnel_router, "config_mgr", test_cfg_mgr),
-        patch.object(tunnel_router, "pm", mock_pm),
-        patch.object(tunnel_router, "token_store", test_token_store),
-        patch.object(health_router, "pm", mock_pm),
-        patch.object(setup_router, "config_mgr", test_cfg_mgr),
-        patch.object(setup_router, "cli", mock_cli),
-        patch.object(setup_router, "pm", mock_pm),
-    ):
+    async def _status():
+        return tunnel_status
+
+    with ExitStack() as stack:
+        stack.enter_context(patch.dict(os.environ, {"PAAS_LINK_STATE": str(tmp_config_dir / "paas-link.json")}))
+        stack.enter_context(patch.object(metrics_service, "tunnel_status", _status))
+        stack.enter_context(patch.object(config_router, "pm", mock_pm))
+        stack.enter_context(patch.object(config_router, "cli", mock_cli))
+        stack.enter_context(patch.object(config_router, "DATA_DIR", tmp_config_dir))
+        stack.enter_context(patch.object(tunnel_router, "cli", mock_cli))
+        stack.enter_context(patch.object(tunnel_router, "DATA_DIR", tmp_config_dir))
+        stack.enter_context(patch.object(health_router, "DATA_DIR", tmp_config_dir))
+        stack.enter_context(patch.object(setup_router, "token_store", test_token_store))
+        stack.enter_context(patch.object(paas_router, "config_mgr", test_cfg_mgr))
+        stack.enter_context(patch.object(paas_router, "token_store", test_token_store))
+        stack.enter_context(patch.object(paas_router, "pm", mock_pm))
+        stack.enter_context(patch.object(paas_router, "cli", mock_cli))
+        stack.enter_context(patch.object(paas_router, "DATA_DIR", tmp_config_dir))
+        stack.enter_context(patch.object(config_router, "config_mgr", test_cfg_mgr))
+        stack.enter_context(patch.object(config_router, "token_store", test_token_store))
+        stack.enter_context(patch.object(tunnel_router, "config_mgr", test_cfg_mgr))
+        stack.enter_context(patch.object(tunnel_router, "pm", mock_pm))
+        stack.enter_context(patch.object(tunnel_router, "token_store", test_token_store))
+        stack.enter_context(patch.object(health_router, "pm", mock_pm))
+        stack.enter_context(patch.object(logs_router, "pm", mock_pm))
+        stack.enter_context(patch.object(setup_router, "config_mgr", test_cfg_mgr))
+        stack.enter_context(patch.object(setup_router, "cli", mock_cli))
+        stack.enter_context(patch.object(setup_router, "pm", mock_pm))
         from backend.main import app
 
         transport = ASGITransport(app=app)

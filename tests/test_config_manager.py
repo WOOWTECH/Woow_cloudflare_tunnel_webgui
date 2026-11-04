@@ -39,7 +39,7 @@ class TestDefaultConfig:
         assert DEFAULT_CONFIG["tunnel_name"] == ""
         assert DEFAULT_CONFIG["post_quantum"] is False
         assert DEFAULT_CONFIG["log_level"] == "info"
-        assert DEFAULT_CONFIG["run_parameters"] == ""
+        assert DEFAULT_CONFIG["run_parameters"] == []
         assert DEFAULT_CONFIG["no_tls_verify"] is True
 
     @pytest.mark.asyncio

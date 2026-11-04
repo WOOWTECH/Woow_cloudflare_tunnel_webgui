@@ -1,39 +1,36 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
-import type { TunnelStatus, ActionResponse } from '@/types'
-import { getCsrfToken } from '@/composables/useCsrf'
+import { computed, ref } from 'vue'
+import { api } from '@/api'
+import type { ActionResponse, HealthStatus } from '@/types'
 
+/**
+ * Health / tunnel status store. The status comes from cloudflared's /ready
+ * (edge connections), the same signal the container healthcheck uses.
+ */
 export const useTunnelStore = defineStore('tunnel', () => {
-  const status = ref<TunnelStatus | null>(null)
-  const loading = ref(false)
+  const health = ref<HealthStatus | null>(null)
   const actionLoading = ref(false)
   const error = ref<string | null>(null)
   let pollInterval: ReturnType<typeof setInterval> | null = null
 
-  async function fetchStatus() {
+  const tunnelStatus = computed(() => health.value?.tunnel.status ?? 'unknown')
+  const isRunning = computed(() => health.value?.process_running === true)
+
+  async function fetchHealth() {
     try {
-      const res = await fetch('/api/tunnel/status')
-      if (!res.ok) throw new Error(await res.text())
-      status.value = await res.json()
+      health.value = await api<HealthStatus>('/api/health')
     } catch (e: unknown) {
+      health.value = null
       error.value = e instanceof Error ? e.message : String(e)
     }
   }
 
-  async function action(
-    endpoint: 'start' | 'stop' | 'restart'
-  ): Promise<ActionResponse> {
+  async function action(endpoint: 'start' | 'stop' | 'restart'): Promise<ActionResponse> {
     actionLoading.value = true
     error.value = null
     try {
-      const csrf = getCsrfToken()
-      const res = await fetch(`/api/tunnel/${endpoint}`, {
-        method: 'POST',
-        headers: { 'x-csrftoken': csrf },
-      })
-      if (!res.ok) throw new Error(await res.text())
-      const result: ActionResponse = await res.json()
-      await fetchStatus()
+      const result = await api<ActionResponse>(`/api/tunnel/${endpoint}`, { method: 'POST' })
+      await fetchHealth()
       return result
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
@@ -43,10 +40,10 @@ export const useTunnelStore = defineStore('tunnel', () => {
     }
   }
 
-  function startPolling(intervalMs = 5000) {
+  function startPolling(intervalMs = 4000) {
     stopPolling()
-    fetchStatus()
-    pollInterval = setInterval(fetchStatus, intervalMs)
+    fetchHealth()
+    pollInterval = setInterval(fetchHealth, intervalMs)
   }
 
   function stopPolling() {
@@ -57,11 +54,12 @@ export const useTunnelStore = defineStore('tunnel', () => {
   }
 
   return {
-    status,
-    loading,
+    health,
     actionLoading,
     error,
-    fetchStatus,
+    tunnelStatus,
+    isRunning,
+    fetchHealth,
     action,
     startPolling,
     stopPolling,

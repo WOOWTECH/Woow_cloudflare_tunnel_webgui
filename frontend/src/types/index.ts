@@ -1,12 +1,5 @@
-export type LogLevel =
-  | 'trace'
-  | 'debug'
-  | 'info'
-  | 'notice'
-  | 'warn'
-  | 'warning'
-  | 'error'
-  | 'fatal'
+/** cloudflared --loglevel values (cloudflared rejects anything else). */
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'fatal'
 
 /** A single ingress route used by the setup wizard / RouteEditor / Config. */
 export interface Route {
@@ -33,12 +26,17 @@ export interface TunnelConfig {
   catch_all_service: string
   post_quantum: boolean
   log_level: LogLevel
-  run_parameters: string
+  run_parameters: string[]
   no_tls_verify: boolean
   tunnel_token_masked: string
+  tunnel_token_set: boolean
+  tunnel_token_managed_by_paas: boolean
 }
 
-/** Request body for PUT /api/config (aligns with backend TunnelConfigWrite). */
+/**
+ * Request body for PUT /api/config (aligns with backend TunnelConfigWrite).
+ * tunnel_token: undefined/null keeps the stored token, '' removes it, a value replaces it.
+ */
 export interface TunnelConfigUpdate {
   tunnel_token?: string | null
   mode: SetupMode
@@ -47,13 +45,15 @@ export interface TunnelConfigUpdate {
   catch_all_service: string
   post_quantum: boolean
   log_level: LogLevel
-  run_parameters: string
+  run_parameters: string[]
   no_tls_verify: boolean
 }
 
-/** Response model for GET /api/tunnel/status. */
+/** Tunnel status from cloudflared's metrics /ready endpoint. */
 export interface TunnelStatus {
-  running: boolean
+  status: 'running' | 'starting' | 'stopped'
+  ready_connections: number
+  metrics_reachable: boolean
 }
 
 /** Response model for POST /api/tunnel/{start,stop,restart}. */
@@ -65,5 +65,9 @@ export interface ActionResponse {
 /** Response model for GET /api/health. */
 export interface HealthStatus {
   status: string
+  version: string
   process_running: boolean
+  stopped_by_operator: boolean
+  tunnel: TunnelStatus
+  credentials_error: string | null
 }

@@ -5,3 +5,4 @@ pydantic-settings==2.7.1
 starlette-csrf==3.0.0
 websockets==14.2
 aiofiles==24.1.0
+aiohttp==3.14.3

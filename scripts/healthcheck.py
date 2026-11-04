@@ -10,8 +10,10 @@ Healthy means:
 "Configured" mirrors backend/services/process_manager.autostart_args(): token
 mode with a non-empty token file, or local mode with cert.pem, tunnel.json and
 config.json present. A fresh, unconfigured install therefore stays healthy.
-A /data/.tunnel_stopped marker (written by a future GUI "Stop") suppresses the
-tunnel check so the healthcheck does not fight an operator's stop.
+A /data/.tunnel_stopped marker suppresses the tunnel check so the healthcheck
+does not fight an operator's stop. The GUI's Stop does not write it (a GUI stop
+stays temporary, README "Known behaviour"); an operator creates it by hand, and
+the GUI's Start removes it.
 
 With HealthOnFailure=kill, 3 consecutive failures make podman kill the
 container; systemd (Restart=always) recreates it and the app autostarts
