@@ -36,9 +36,14 @@
 不需要 Podman socket、不需要第二個容器，也不需要下指令。
 
 從 1.2.0 起，功能與 [Woow Cloudflared Home Assistant add-on](https://github.com/WOOWTECH/Woow_ha_cloudflare_tunnel_webgui)
-一致：PaaS 引導連結（逐條路由檢查 Access 保護）、邊緣連線狀態、日誌遮罩、run parameter 白名單，
+一致：PaaS 引導連結（逐條路由檢查公開或 Access 保護模式）、邊緣連線狀態、日誌遮罩、run parameter 白名單，
 以及憑證檔權限防護。需要 HA Supervisor 的功能只在 add-on 提供，包括 Ingress、`external_hostname`
 與 `nginx_proxy_manager`；在這裡改用路由或 catch-all 即可達到相同效果。
+
+從 1.2.1 起，WOOW PaaS **0 個 Access 席次**的訂閱也可連結明確設為公開的路由。
+公開網址沒有 Cloudflare Access 登入關卡，來源應用須自行提供登入；新綁定前
+介面會逐條標示公開網址並要求確認。受 Access 保護的路由仍須有席次、登入方式
+及明確的 Email 允許規則。升級既有 Podman 連接器會沿用 PaaS 綁定與資料卷。
 
 `scripts/install.sh` 會把它安裝成 **rootless Podman Quadlet 單元，由使用者層級的 systemd 管理**：
 開機自動啟動（需 linger）、當掉會自動重啟，而且從 1.1.0 起，**後端還活著但隧道死掉時也會自救**。

@@ -281,13 +281,11 @@ async def test_failed_release_after_failed_start_can_be_retried(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["unprotected", "everyone", "draft", "no_login", "zero_seats"])
+@pytest.mark.parametrize("change", ["everyone", "draft", "no_login", "zero_seats"])
 async def test_unsafe_service_blocks_connect_without_claiming(client, fake_paas, tmp_config_dir, change):
     _authorized(tmp_config_dir)
     route = fake_paas.detail["routes"][0]
-    if change == "unprotected":
-        route["is_protected"] = False
-    elif change == "everyone":
+    if change == "everyone":
         route["access_policies"].append({"decision": "allow", "include": [{"rule_type": "everyone"}]})
     elif change == "draft":
         fake_paas.detail["subscription"]["state"] = "draft"
@@ -298,6 +296,82 @@ async def test_unsafe_service_blocks_connect_without_claiming(client, fake_paas,
     assert (await client.get("/api/paas/accesses/25/review")).json()["ready"] is False
     assert (await client.post("/api/paas/accesses/25/connect")).status_code == 409
     assert all("tunnel-token" not in path for path, _ in fake_paas)
+
+
+@pytest.mark.asyncio
+async def test_zero_seat_public_route_requires_confirmation_then_claims(
+        client, fake_paas, stoppable_pm, tmp_config_dir):
+    _authorized(tmp_config_dir)
+    route = fake_paas.detail["routes"][0]
+    route.update(is_protected=False, access_configuration_ready=False,
+                 login_email_otp=False, access_policies=[])
+    fake_paas.detail["subscription"].update(ac_max_access_seats=0, ac_used_access_seats=0)
+    review = (await client.get("/api/paas/accesses/25/review")).json()
+    assert review["ready"] is True
+    assert review["public_routes"] == ["ha.example.com"]
+    assert review["access"]["routes"][0]["public"] is True
+    denied = await client.post("/api/paas/accesses/25/connect")
+    assert denied.status_code == 409 and "公開網址" in denied.json()["detail"]
+    assert all("tunnel-token" not in path for path, _ in fake_paas)
+    connected = await client.post("/api/paas/accesses/25/connect",
+                                  json={"allow_public_routes": True})
+    assert connected.status_code == 200
+    assert _link(tmp_config_dir)["connection"]["access_id"] == 25
+    assert (tmp_config_dir / ".tunnel_token").stat().st_mode & 0o777 == 0o600
+    status = (await client.get("/api/paas/connection/status")).json()
+    assert status["service_ready"] is True
+    assert status["access_ready"] is False
+    assert status["public_routes"] == ["ha.example.com"]
+
+
+@pytest.mark.asyncio
+async def test_mixed_service_only_needs_seat_for_protected_route(client, fake_paas, tmp_config_dir):
+    _authorized(tmp_config_dir)
+    public = dict(fake_paas.detail["routes"][0])
+    public.update(hostname="public.example.com", is_protected=False,
+                  access_configuration_ready=False, access_policies=[])
+    fake_paas.detail["routes"].append(public)
+    review = (await client.get("/api/paas/accesses/25/review")).json()
+    assert review["ready"] is True
+    assert review["public_routes"] == ["public.example.com"]
+    fake_paas.detail["subscription"]["ac_max_access_seats"] = 0
+    review = (await client.get("/api/paas/accesses/25/review")).json()
+    assert review["ready"] is False
+    assert any("ha.example.com" in issue and "席次" in issue for issue in review["issues"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["missing_origin", "missing_hostname", "lost", "unknown_publication"])
+async def test_public_route_rejects_incomplete_or_ambiguous_state(
+        client, fake_paas, tmp_config_dir, change):
+    _authorized(tmp_config_dir)
+    route = fake_paas.detail["routes"][0]
+    route["is_protected"] = False
+    if change == "missing_origin":
+        route["service_url"] = ""
+    elif change == "missing_hostname":
+        route["hostname"] = ""
+    elif change == "lost":
+        route["access_protection_lost"] = True
+    else:
+        route.pop("access_publish_pending")
+    review = (await client.get("/api/paas/accesses/25/review")).json()
+    assert review["ready"] is False
+    assert (await client.post("/api/paas/accesses/25/connect",
+                              json={"allow_public_routes": True})).status_code == 409
+    assert all("tunnel-token" not in path for path, _ in fake_paas)
+
+
+@pytest.mark.asyncio
+async def test_pending_public_route_can_claim_without_publication_deadlock(
+        client, fake_paas, tmp_config_dir):
+    _authorized(tmp_config_dir)
+    fake_paas.detail["routes"][0].update(is_protected=False,
+        access_publish_pending=True, access_configuration_ready=False)
+    review = (await client.get("/api/paas/accesses/25/review")).json()
+    assert review["ready"] is True
+    assert review["awaiting_publication"] is True
+    assert review["access"]["routes"][0]["public"] is True
 
 
 @pytest.mark.asyncio
@@ -402,7 +476,7 @@ async def test_pending_publication_with_complete_protection_does_not_block(clien
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["no_login", "everyone", "unprotected", "lost", "unresolved_idp", "no_allow"])
+@pytest.mark.parametrize("change", ["no_login", "everyone", "lost", "unresolved_idp", "no_allow"])
 async def test_pending_publication_never_hides_a_missing_protection(client, fake_paas, tmp_config_dir, change):
     _authorized(tmp_config_dir)
     route = fake_paas.detail["routes"][0]

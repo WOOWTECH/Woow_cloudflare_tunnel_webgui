@@ -38,10 +38,17 @@ no second container, and no CLI.
 
 Since 1.2.0 the GUI has the same features as the
 [Woow Cloudflared Home Assistant add-on](https://github.com/WOOWTECH/Woow_ha_cloudflare_tunnel_webgui):
-the guided PaaS link with per-route Access review, edge-connection status, redacted logs,
+the guided PaaS link with per-route public or Access-protected review, edge-connection status, redacted logs,
 the run-parameter allow-list and the credential-file guard. What stays add-on only is what
 needs the HA Supervisor: Ingress, `external_hostname` and `nginx_proxy_manager`. Here a
 route or a catch-all does the same job.
+
+From 1.2.1, a WOOW PaaS subscription with **zero Access seats** can link an
+explicitly public route. Public hostnames have no Cloudflare Access login;
+the origin application must enforce its own login. The PaaS link page labels
+these routes and requires confirmation before a new claim. Protected routes
+still require a seat, login method and specific email allow policy. Upgrading
+an existing Podman connector keeps its PaaS binding and data volume.
 
 `scripts/install.sh` installs it as **rootless Podman Quadlet units under user systemd**, so
 it starts at boot (with linger), restarts when it crashes, and — new in 1.1.0 — restarts

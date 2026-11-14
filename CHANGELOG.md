@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1 — PaaS routes without Access seats
+
+- A subscription with zero Access seats can now link when its routes are explicitly public. Each protected route still requires an Access seat, a login method and a specific email allow policy.
+- Review and connection status distinguish public routes from Access-protected routes. Both the UI and backend require explicit confirmation before claiming a service with public hostnames.
+- Public routes can be claimed while PaaS keeps publication pending; the origin remains closed until the connector is live and PaaS finishes publishing. Missing hostnames, origins, or ambiguous protection state still block the claim.
+- Existing PaaS bindings, token files, Quadlet units and data volumes require no migration. This release preserves the connector and its remote binding during the image upgrade.
+
 ## 1.2.0 — feature parity with the Woow Cloudflared HA add-on (1.1.1)
 
 **Added**
